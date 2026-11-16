@@ -269,7 +269,9 @@ impl PlanActMachine {
             || (tool.name == "archive_and_system"
                 && matches!(op, Some("uname" | "df" | "which" | "env" | "disk_usage")))
             || (tool.name == "local_rag_docs" && matches!(op, Some("query" | "status")))
-            || (tool.name == "headless_browser" && op == Some("inspect"));
+            || (tool.name == "headless_browser" && op == Some("inspect"))
+            || (tool.name == "templates_ops"
+                && matches!(op, Some("list" | "linux_deps" | "vendor_status")));
         if tool.name == "git_ops"
             && op == Some("branch")
             && call.arguments.get("ref_name").and_then(|v| v.as_str()).is_some()
@@ -397,6 +399,7 @@ impl PlanActMachine {
                 | "local_rag_docs"
                 | "headless_browser"
                 | "app_verifier"
+                | "templates_ops"
                 | "sqlite_db_inspector"
                 | "git_ops"
                 | "archive_and_system"

@@ -1,0 +1,53 @@
+# Source product rules — desktop apps (HARD)
+
+These rules are non-negotiable for every Plan/Act turn and every agent working in a Source workspace.
+
+## Desktop apps: NEVER refuse
+
+1. **NEVER** refuse a native/desktop app request with excuses such as:
+   - "this environment can't build a desktop app"
+   - "use Electron later"
+   - "I'll give you a standalone HTML package instead"
+   - "Tauri/WebKitGTK isn't available so here's a web page"
+2. When the user asks for a **desktop app**, Source **MUST** produce a finished **Tauri v2** project (preferred) or an equivalent native desktop project **under the workspace**.
+3. **HTML-only / static web** is allowed **only** when the user explicitly asked for a web page / website / HTML. It is **never** a substitute for a desktop request.
+4. Prefer completing `scripts/build-desktop.sh` / `pnpm tauri build` / `tauri build`. If WebKitGTK or `-dev` packages are missing:
+   - install them when possible (`./scripts/build-desktop.sh --install-deps`, or the exact `apt` packages below), **or**
+   - document the exact apt packages,
+   - and **still leave a complete Tauri project** that builds once deps exist.
+5. Do **not** abandon the desktop target. A complete `src-tauri/` + frontend that is ready to build counts as shipping the desktop app; a binary is required when GTK/WebKit deps are present.
+
+## Required workflow for desktop requests
+
+1. Ensure offline layout: `./scripts/offline-init.sh` (seeds `~/.source/templates/` + caches).
+2. Create from template via tool or RPC — **do not hand-roll stubs**:
+   - Tool: `templates_ops` with `op: "create_desktop_app"` (template `tauri-v2-react`)
+   - Or: `source/templates/scaffold` with `template_id: "tauri-v2-react"`
+3. Customize the scaffolded UI/backend for the user's request (calculator-class apps stay offline-capable).
+4. Build:
+   - App project: `./scripts/build-desktop.sh` inside the scaffold, or `pnpm tauri build`
+   - Source IDE itself: repo-root `./scripts/build-desktop.sh`
+5. Verify with `app_verifier` (`kind: "desktop"` or launch + assert) and/or `terminal_exec`.
+
+## Linux Tauri deps (exact)
+
+```bash
+sudo apt-get install -y \
+  libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+  patchelf pkg-config build-essential curl wget file \
+  libssl-dev libayatana-appindicator3-dev
+```
+
+Or: `./scripts/build-desktop.sh --install-deps` (non-interactive when passwordless sudo is available).
+
+## Offline paths
+
+- Templates: `~/.source/templates/` (esp. `tauri-v2-react`)
+- Caches: `~/.source/cache/vendor/{npm,pnpm,cargo,wheels}`
+- Override home with `SOURCE_HOME`
+
+## Forbidden substitutes
+
+- Electron "maybe later"
+- Single `.html` file offered instead of desktop
+- "Can't build here" without leaving a complete Tauri tree + deps instructions

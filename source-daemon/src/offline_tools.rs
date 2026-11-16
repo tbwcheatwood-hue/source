@@ -44,7 +44,7 @@ pub fn phase3_builtin_tools() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
             name: "fs_ops".into(),
-            description: "Filesystem ops: read/write/list/mkdir/remove/copy/move/stat".into(),
+            description: "Filesystem ops: read/write/list/mkdir/remove/copy/move/stat. For desktop apps prefer templates_ops create_desktop_app (never substitute HTML-only).".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -122,20 +122,53 @@ pub fn phase3_builtin_tools() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "app_verifier".into(),
-            description: "Closed-loop launch→navigate→inspect→assert for local apps".into(),
+            description: "Closed-loop launch→navigate→inspect→assert for local apps. Supports kind=desktop to build/verify Tauri projects via scripts/build-desktop.sh (never abandon desktop for HTML-only).".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
+                    "kind": { "type": "string", "enum": ["web", "desktop"] },
                     "launch_command": { "type": "string" },
                     "cwd": { "type": "string" },
                     "url": { "type": "string" },
                     "ready_selector": { "type": "string" },
                     "assert_text": { "type": "string" },
-                    "timeout_ms": { "type": "integer" }
+                    "timeout_ms": { "type": "integer" },
+                    "install_deps": { "type": "boolean" },
+                    "build_only": { "type": "boolean" }
                 },
-                "required": ["launch_command", "url"]
+                "required": []
             }),
             categories: vec![Shell, Network],
+            enabled: true,
+            offline_capable: true,
+            requires_wan: false,
+        },
+        ToolDefinition {
+            name: "templates_ops".into(),
+            description: "Offline app factory: list/scaffold templates, create_desktop_app (Tauri v2), build_desktop, linux_deps, vendor_status. REQUIRED for desktop requests — never refuse or substitute HTML-only.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "op": {
+                        "type": "string",
+                        "enum": [
+                            "list",
+                            "scaffold",
+                            "create_desktop_app",
+                            "build_desktop",
+                            "linux_deps",
+                            "vendor_status"
+                        ]
+                    },
+                    "template_id": { "type": "string" },
+                    "dest": { "type": "string" },
+                    "name": { "type": "string" },
+                    "path": { "type": "string" },
+                    "install_deps": { "type": "boolean" }
+                },
+                "required": ["op"]
+            }),
+            categories: vec![FileEdits, Shell],
             enabled: true,
             offline_capable: true,
             requires_wan: false,
@@ -249,6 +282,7 @@ pub async fn execute_offline_tool(
         "local_rag_docs" => exec_rag(ctx, &call.arguments).await,
         "headless_browser" => exec_browser(ctx, &call.arguments).await,
         "app_verifier" => exec_verifier(ctx, &call.arguments).await,
+        "templates_ops" => exec_templates(ctx, &call.arguments),
         "sqlite_db_inspector" => exec_sqlite(&call.arguments).await,
         "git_ops" => exec_git(&call.arguments),
         "archive_and_system" => exec_archive_system(&call.arguments),
@@ -465,11 +499,48 @@ async fn exec_browser(ctx: &OfflineToolContext<'_>, args: &Value) -> Result<Stri
 }
 
 async fn exec_verifier(ctx: &OfflineToolContext<'_>, args: &Value) -> Result<String> {
+    let kind = args
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .unwrap_or("web");
+    if kind == "desktop" {
+        let cwd = args
+            .get("cwd")
+            .or_else(|| args.get("path"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("app_verifier kind=desktop requires cwd/path to a Tauri project"))?;
+        let install_deps = args
+            .get("install_deps")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let build = ctx
+            .templates
+            .build_desktop(Path::new(cwd), install_deps)?;
+        let build_only = args
+            .get("build_only")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        if build_only || args.get("url").and_then(|v| v.as_str()).is_none() {
+            return Ok(serde_json::to_string_pretty(&json!({
+                "kind": "desktop",
+                "build": build,
+                "linux_deps": crate::templates::linux_tauri_apt_install_command(),
+                "note": "Desktop target retained. If build failed on missing WebKitGTK/-dev packages, install deps and re-run — do not switch to HTML-only."
+            }))?);
+        }
+        // Optional: after build, also verify a URL if provided (e.g. tauri dev webview host).
+    }
+
     let launch = args
         .get("launch_command")
         .and_then(|v| v.as_str())
         .unwrap_or("");
     let url = args.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    if launch.is_empty() || url.is_empty() {
+        return Err(anyhow!(
+            "app_verifier web mode requires launch_command + url (or use kind=desktop with cwd)"
+        ));
+    }
     let r = ctx
         .browser
         .verify_app(
@@ -484,6 +555,58 @@ async fn exec_verifier(ctx: &OfflineToolContext<'_>, args: &Value) -> Result<Str
         .await
         .map_err(|e| anyhow!(e.to_string()))?;
     Ok(serde_json::to_string_pretty(&r)?)
+}
+
+fn exec_templates(ctx: &OfflineToolContext<'_>, args: &Value) -> Result<String> {
+    let op = args.get("op").and_then(|v| v.as_str()).unwrap_or("");
+    match op {
+        "list" => Ok(serde_json::to_string_pretty(&ctx.templates.list()?)?),
+        "scaffold" => {
+            let template_id = args
+                .get("template_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("template_id required"))?;
+            let dest = args
+                .get("dest")
+                .or_else(|| args.get("path"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("dest required"))?;
+            let name = args.get("name").and_then(|v| v.as_str());
+            let path = ctx.templates.scaffold(template_id, Path::new(dest), name)?;
+            Ok(serde_json::to_string_pretty(&json!({ "dest": path }))?)
+        }
+        "create_desktop_app" => {
+            let dest = args
+                .get("dest")
+                .or_else(|| args.get("path"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("dest required for create_desktop_app"))?;
+            let name = args.get("name").and_then(|v| v.as_str());
+            let result = ctx.templates.create_desktop_app(Path::new(dest), name)?;
+            Ok(serde_json::to_string_pretty(&result)?)
+        }
+        "build_desktop" => {
+            let path = args
+                .get("path")
+                .or_else(|| args.get("dest"))
+                .or_else(|| args.get("cwd"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("path required for build_desktop"))?;
+            let install_deps = args
+                .get("install_deps")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let result = ctx.templates.build_desktop(Path::new(path), install_deps)?;
+            Ok(serde_json::to_string_pretty(&result)?)
+        }
+        "linux_deps" => Ok(serde_json::to_string_pretty(&json!({
+            "packages": crate::templates::LINUX_TAURI_APT_PACKAGES,
+            "apt_install": crate::templates::linux_tauri_apt_install_command(),
+            "helper": "./scripts/build-desktop.sh --install-deps"
+        }))?),
+        "vendor_status" => Ok(serde_json::to_string_pretty(&ctx.templates.vendor_status()?)?),
+        other => Err(anyhow!("unknown templates_ops op {other}")),
+    }
 }
 
 async fn exec_sqlite(args: &Value) -> Result<String> {

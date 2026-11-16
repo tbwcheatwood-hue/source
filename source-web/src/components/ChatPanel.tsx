@@ -1,4 +1,5 @@
 import { FormEvent, useState } from "react";
+import { buildAgentSystemPrompt } from "../agent/systemPrompt";
 import type { SourceClient } from "../api/client";
 import type { LlmMessage, Mode, SessionMeta } from "../types/protocol";
 
@@ -26,7 +27,7 @@ export function ChatPanel({
     {
       role: "system",
       content:
-        "Plan/Act agent panel. Plan is read-only; Act can invoke tools after approvals. Completions go through source/llm/complete using the selected local provider.",
+        "Plan/Act agent panel. Plan is read-only; Act can invoke tools after approvals. Completions go through source/llm/complete using the selected local provider. Desktop requests must ship Tauri v2 — never refuse or substitute HTML-only.",
     },
   ]);
   const [input, setInput] = useState("");
@@ -58,7 +59,11 @@ export function ChatPanel({
         "";
       messages.unshift({
         role: "system",
-        content: `You are Source IDE agent in ${mode} mode. Workspace: ${sess.workspace_root}. Provider: ${providerId || "(daemon default)"}. Be concise.`,
+        content: buildAgentSystemPrompt({
+          mode,
+          workspaceRoot: sess.workspace_root,
+          providerId,
+        }),
       });
       const resp = await client.complete({
         // Empty id lets the daemon resolve selected / session / first enabled local provider.

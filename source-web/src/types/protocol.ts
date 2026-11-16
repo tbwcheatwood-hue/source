@@ -488,6 +488,9 @@ export interface VendorCacheStatus {
     pnpm_offline_install: string;
     cargo_vendor: string;
     pip_wheelhouse: string;
+    create_desktop_app: string;
+    build_desktop: string;
+    linux_tauri_deps: string;
   };
 }
 

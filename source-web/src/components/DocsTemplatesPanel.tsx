@@ -170,7 +170,24 @@ export function DocsTemplatesPanel({
           <button type="submit" className="ide-btn" disabled={busy || !scaffoldId}>
             Scaffold into workspace
           </button>
+          <button
+            type="button"
+            className="ide-btn"
+            disabled={busy}
+            onClick={() => {
+              setScaffoldId("tauri-v2-react");
+              if (!scaffoldName || scaffoldName === "my-app") {
+                setScaffoldName("desktop-app");
+              }
+            }}
+          >
+            Use desktop (Tauri) template
+          </button>
         </form>
+        <p className="mt-2 text-xs text-ink-500">
+          Desktop requests must use <span className="font-mono">tauri-v2-react</span> — never HTML-only substitutes.
+          Build with <span className="font-mono">./scripts/build-desktop.sh</span>.
+        </p>
       </section>
 
       <section>
