@@ -320,7 +320,7 @@ impl LlmRouter {
         api_key_env: Option<&str>,
         session_id: Option<SessionId>,
     ) -> Result<Vec<String>, CoreError> {
-        let url = join_url(base_url, "models");
+        let url = openai_url(base_url, "models");
         let mut headers: Vec<(String, String)> = Vec::new();
         if let Some(env_name) = api_key_env {
             if let Ok(key) = std::env::var(env_name) {
@@ -430,7 +430,7 @@ impl LlmRouter {
         request: &LlmRequest,
         session_id: Option<SessionId>,
     ) -> Result<LlmResponse, CoreError> {
-        let url = join_url(&provider.base_url, "chat/completions");
+        let url = openai_url(&provider.base_url, "chat/completions");
         let mut headers = provider.extra_headers.clone();
         if let Some(env_name) = &provider.api_key_env {
             if let Ok(key) = std::env::var(env_name) {
@@ -464,19 +464,32 @@ impl LlmRouter {
                 provider.id
             )));
         }
-        let value: serde_json::Value = resp
-            .json()
+        let raw = resp
+            .text()
             .await
             .map_err(|e| CoreError::Other(e.to_string()))?;
-        let content = value
-            .pointer("/choices/0/message/content")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        let value = parse_json_body(&raw).map_err(|e| {
+            CoreError::Other(format!(
+                "provider {} returned unparseable JSON: {e}; body={}",
+                provider.id,
+                truncate_chars(&raw, 400)
+            ))
+        })?;
+        let parsed = parse_openai_chat_response(&value).ok_or_else(|| {
+            CoreError::Other(format!(
+                "provider {} returned no assistant content (expected choices[0].message.content); body={}",
+                provider.id,
+                truncate_chars(&raw, 400)
+            ))
+        })?;
         Ok(LlmResponse {
             provider_id: provider.id.clone(),
-            model: provider.model.clone(),
-            content,
+            model: value
+                .get("model")
+                .and_then(|v| v.as_str())
+                .unwrap_or(provider.model.as_str())
+                .to_string(),
+            content: parsed.content,
             prompt_tokens: value
                 .pointer("/usage/prompt_tokens")
                 .and_then(|v| v.as_u64())
@@ -485,10 +498,7 @@ impl LlmRouter {
                 .pointer("/usage/completion_tokens")
                 .and_then(|v| v.as_u64())
                 .map(|n| n as u32),
-            finish_reason: value
-                .pointer("/choices/0/finish_reason")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
+            finish_reason: parsed.finish_reason,
         })
     }
 
@@ -526,19 +536,34 @@ impl LlmRouter {
                 "ollama returned {status}: {text}"
             )));
         }
-        let value: serde_json::Value = resp
-            .json()
+        let raw = resp
+            .text()
             .await
             .map_err(|e| CoreError::Other(e.to_string()))?;
-        let content = value
-            .pointer("/message/content")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        let value = parse_json_body(&raw).map_err(|e| {
+            CoreError::Other(format!(
+                "ollama returned unparseable JSON: {e}; body={}",
+                truncate_chars(&raw, 400)
+            ))
+        })?;
+        // Prefer native Ollama chat/generate shapes; fall back to OpenAI-compat
+        // in case the base URL was pointed at /v1 by mistake.
+        let parsed = parse_ollama_chat_response(&value)
+            .or_else(|| parse_openai_chat_response(&value))
+            .ok_or_else(|| {
+                CoreError::Other(format!(
+                    "ollama returned no assistant content (expected message.content or response); body={}",
+                    truncate_chars(&raw, 400)
+                ))
+            })?;
         Ok(LlmResponse {
             provider_id: provider.id.clone(),
-            model: provider.model.clone(),
-            content,
+            model: value
+                .get("model")
+                .and_then(|v| v.as_str())
+                .unwrap_or(provider.model.as_str())
+                .to_string(),
+            content: parsed.content,
             prompt_tokens: value
                 .get("prompt_eval_count")
                 .and_then(|v| v.as_u64())
@@ -547,10 +572,12 @@ impl LlmRouter {
                 .get("eval_count")
                 .and_then(|v| v.as_u64())
                 .map(|n| n as u32),
-            finish_reason: value
-                .get("done_reason")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
+            finish_reason: parsed.finish_reason.or_else(|| {
+                value
+                    .get("done_reason")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            }),
         })
     }
 
@@ -620,10 +647,15 @@ impl LlmRouter {
             .await
             .map_err(|e| CoreError::Other(e.to_string()))?;
         let content = value
-            .pointer("/content/0/text")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+            .get("content")
+            .and_then(json_to_text)
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| {
+                CoreError::Other(format!(
+                    "anthropic returned no assistant text; body={}",
+                    truncate_chars(&value.to_string(), 400)
+                ))
+            })?;
         Ok(LlmResponse {
             provider_id: provider.id.clone(),
             model: provider.model.clone(),
@@ -698,10 +730,20 @@ impl LlmRouter {
             .await
             .map_err(|e| CoreError::Other(e.to_string()))?;
         let content = value
-            .pointer("/candidates/0/content/parts/0/text")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+            .pointer("/candidates/0/content/parts")
+            .and_then(json_to_text)
+            .or_else(|| {
+                value
+                    .pointer("/candidates/0/content/parts/0/text")
+                    .and_then(json_to_text)
+            })
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| {
+                CoreError::Other(format!(
+                    "gemini returned no assistant text; body={}",
+                    truncate_chars(&value.to_string(), 400)
+                ))
+            })?;
         Ok(LlmResponse {
             provider_id: LlmProviderId::new(provider.id.0.clone()),
             model: provider.model.clone(),
@@ -711,6 +753,211 @@ impl LlmRouter {
             finish_reason: None,
         })
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedAssistant {
+    content: String,
+    finish_reason: Option<String>,
+}
+
+/// Coerce OpenAI/Ollama content fields that may be a string, null, or multipart array.
+fn json_to_text(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        serde_json::Value::Bool(b) => Some(b.to_string()),
+        serde_json::Value::Array(items) => {
+            let mut out = String::new();
+            for item in items {
+                if let Some(piece) = json_to_text(item) {
+                    out.push_str(&piece);
+                } else if let Some(text) = item.get("text").and_then(json_to_text) {
+                    out.push_str(&text);
+                } else if let Some(text) = item.get("content").and_then(json_to_text) {
+                    out.push_str(&text);
+                }
+            }
+            if out.is_empty() {
+                None
+            } else {
+                Some(out)
+            }
+        }
+        serde_json::Value::Object(map) => {
+            if let Some(text) = map.get("text").and_then(json_to_text) {
+                return Some(text);
+            }
+            if let Some(text) = map.get("content").and_then(json_to_text) {
+                return Some(text);
+            }
+            None
+        }
+    }
+}
+
+fn parse_openai_chat_response(value: &serde_json::Value) -> Option<ParsedAssistant> {
+    // Non-stream chat.completions
+    let message = value.pointer("/choices/0/message");
+    let mut content = message
+        .and_then(|m| m.get("content"))
+        .and_then(json_to_text)
+        .unwrap_or_default();
+    // Some local servers put the final answer only in reasoning/refusal fields.
+    if content.trim().is_empty() {
+        if let Some(m) = message {
+            for key in ["reasoning_content", "reasoning", "refusal"] {
+                if let Some(extra) = m.get(key).and_then(json_to_text) {
+                    if !extra.trim().is_empty() {
+                        content = extra;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    // Accidental stream-shaped single object: choices[0].delta.content
+    if content.trim().is_empty() {
+        content = value
+            .pointer("/choices/0/delta/content")
+            .and_then(json_to_text)
+            .unwrap_or_default();
+    }
+    // Legacy text completions
+    if content.trim().is_empty() {
+        content = value
+            .pointer("/choices/0/text")
+            .and_then(json_to_text)
+            .unwrap_or_default();
+    }
+    // Aggregated NDJSON stream payload synthesized by parse_json_body
+    if content.trim().is_empty() {
+        if let Some(chunks) = value.get("source_stream_chunks").and_then(|v| v.as_array()) {
+            let mut joined = String::new();
+            for chunk in chunks {
+                if let Some(piece) = parse_openai_chat_response(chunk).map(|p| p.content) {
+                    joined.push_str(&piece);
+                }
+            }
+            content = joined;
+        }
+    }
+    if content.trim().is_empty() {
+        return None;
+    }
+    let finish_reason = value
+        .pointer("/choices/0/finish_reason")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    Some(ParsedAssistant {
+        content,
+        finish_reason,
+    })
+}
+
+fn parse_ollama_chat_response(value: &serde_json::Value) -> Option<ParsedAssistant> {
+    let mut content = value
+        .pointer("/message/content")
+        .and_then(json_to_text)
+        .unwrap_or_default();
+    // Thinking models may leave content blank while filling message.thinking.
+    if content.trim().is_empty() {
+        content = value
+            .pointer("/message/thinking")
+            .and_then(json_to_text)
+            .unwrap_or_default();
+    }
+    // /api/generate uses `response`
+    if content.trim().is_empty() {
+        content = value
+            .get("response")
+            .and_then(json_to_text)
+            .unwrap_or_default();
+    }
+    // Aggregated NDJSON stream from Ollama when stream=false was ignored
+    if content.trim().is_empty() {
+        if let Some(chunks) = value.get("source_stream_chunks").and_then(|v| v.as_array()) {
+            let mut joined = String::new();
+            for chunk in chunks {
+                if let Some(piece) = chunk
+                    .pointer("/message/content")
+                    .and_then(json_to_text)
+                    .or_else(|| chunk.get("response").and_then(json_to_text))
+                {
+                    joined.push_str(&piece);
+                }
+            }
+            content = joined;
+        }
+    }
+    if content.trim().is_empty() {
+        return None;
+    }
+    let finish_reason = value
+        .get("done_reason")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    Some(ParsedAssistant {
+        content,
+        finish_reason,
+    })
+}
+
+/// Parse a single JSON object, or aggregate NDJSON / SSE `data:` lines into one object.
+fn parse_json_body(raw: &str) -> Result<serde_json::Value, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("empty body".into());
+    }
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        return Ok(value);
+    }
+
+    let mut chunks: Vec<serde_json::Value> = Vec::new();
+    for line in trimmed.lines() {
+        let line = line.trim();
+        if line.is_empty() || line == "[DONE]" || line == "data: [DONE]" {
+            continue;
+        }
+        let payload = line.strip_prefix("data:").map(str::trim).unwrap_or(line);
+        if payload.is_empty() || payload == "[DONE]" {
+            continue;
+        }
+        match serde_json::from_str::<serde_json::Value>(payload) {
+            Ok(v) => chunks.push(v),
+            Err(_) => continue,
+        }
+    }
+    if chunks.is_empty() {
+        return Err("no JSON object found".into());
+    }
+    if chunks.len() == 1 {
+        return Ok(chunks.remove(0));
+    }
+    // Prefer the last object that already has full content; otherwise expose chunks.
+    if let Some(last_full) = chunks.iter().rev().find(|v| {
+        parse_ollama_chat_response(v).is_some() || parse_openai_chat_response(v).is_some()
+    }) {
+        // If any chunk is a stream delta, concatenate via source_stream_chunks.
+        let looks_streamy = chunks.iter().any(|v| {
+            v.pointer("/choices/0/delta").is_some()
+                || (v.get("done") == Some(&serde_json::Value::Bool(false)))
+        });
+        if looks_streamy {
+            return Ok(serde_json::json!({ "source_stream_chunks": chunks }));
+        }
+        return Ok(last_full.clone());
+    }
+    Ok(serde_json::json!({ "source_stream_chunks": chunks }))
+}
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    let mut out: String = s.chars().take(max).collect();
+    if s.chars().count() > max {
+        out.push('…');
+    }
+    out
 }
 
 fn messages_openai(messages: &[LlmMessage]) -> Vec<serde_json::Value> {
@@ -732,14 +979,19 @@ fn messages_openai(messages: &[LlmMessage]) -> Vec<serde_json::Value> {
 
 fn join_url(base: &str, path: &str) -> String {
     let base = base.trim_end_matches('/');
-    if base.ends_with("/v1") && (path.starts_with("chat/") || path == "models") {
-        format!("{base}/{path}")
-    } else if path.starts_with("v1/") || path.starts_with("api/") {
-        format!("{base}/{path}")
-    } else if base.contains("/v1") {
+    let path = path.trim_start_matches('/');
+    format!("{base}/{path}")
+}
+
+/// OpenAI-compatible URL helper. Ensures `/v1/{path}` even when the stored
+/// base_url is bare (`http://127.0.0.1:1234`) instead of `.../v1`.
+fn openai_url(base: &str, path: &str) -> String {
+    let base = base.trim_end_matches('/');
+    let path = path.trim_start_matches('/');
+    if base.ends_with("/v1") || base.contains("/v1/") {
         format!("{base}/{path}")
     } else {
-        format!("{base}/{path}")
+        format!("{base}/v1/{path}")
     }
 }
 
@@ -784,12 +1036,25 @@ mod tests {
             "http://127.0.0.1:11434/api/tags"
         );
         assert_eq!(
-            join_url("http://127.0.0.1:1234/v1", "models"),
+            join_url("http://127.0.0.1:11434/", "api/chat"),
+            "http://127.0.0.1:11434/api/chat"
+        );
+        assert_eq!(
+            openai_url("http://127.0.0.1:1234/v1", "models"),
             "http://127.0.0.1:1234/v1/models"
         );
         assert_eq!(
-            join_url("http://127.0.0.1:1234/v1", "chat/completions"),
+            openai_url("http://127.0.0.1:1234/v1", "chat/completions"),
             "http://127.0.0.1:1234/v1/chat/completions"
+        );
+        // Bare LM Studio / llama.cpp base must still hit /v1/...
+        assert_eq!(
+            openai_url("http://127.0.0.1:1234", "chat/completions"),
+            "http://127.0.0.1:1234/v1/chat/completions"
+        );
+        assert_eq!(
+            openai_url("http://127.0.0.1:1234/", "models"),
+            "http://127.0.0.1:1234/v1/models"
         );
     }
 
@@ -815,5 +1080,144 @@ mod tests {
             parse_openai_models(&openai),
             vec!["local-model", "qwen2.5-coder"]
         );
+    }
+
+    #[test]
+    fn parse_ollama_chat_fixture_string_content() {
+        let fixture = json!({
+            "model": "llama3.2",
+            "created_at": "2024-01-01T00:00:00Z",
+            "message": {
+                "role": "assistant",
+                "content": "Hello from Ollama"
+            },
+            "done": true,
+            "done_reason": "stop",
+            "prompt_eval_count": 12,
+            "eval_count": 4
+        });
+        let parsed = parse_ollama_chat_response(&fixture).expect("ollama content");
+        assert_eq!(parsed.content, "Hello from Ollama");
+        assert_eq!(parsed.finish_reason.as_deref(), Some("stop"));
+    }
+
+    #[test]
+    fn parse_ollama_generate_fixture_response_field() {
+        let fixture = json!({
+            "model": "llama3.2",
+            "response": "generate path answer",
+            "done": true
+        });
+        let parsed = parse_ollama_chat_response(&fixture).expect("generate content");
+        assert_eq!(parsed.content, "generate path answer");
+    }
+
+    #[test]
+    fn parse_ollama_thinking_model_falls_back_to_thinking() {
+        let fixture = json!({
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "thinking": "I should greet the user."
+            },
+            "done": true
+        });
+        let parsed = parse_ollama_chat_response(&fixture).expect("thinking fallback");
+        assert_eq!(parsed.content, "I should greet the user.");
+    }
+
+    #[test]
+    fn parse_ollama_ndjson_stream_chunks() {
+        let raw = r#"
+{"message":{"role":"assistant","content":"Hel"},"done":false}
+{"message":{"role":"assistant","content":"lo"},"done":false}
+{"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop"}
+"#;
+        let value = parse_json_body(raw).expect("ndjson");
+        let parsed = parse_ollama_chat_response(&value).expect("aggregated");
+        assert_eq!(parsed.content, "Hello");
+    }
+
+    #[test]
+    fn parse_openai_chat_fixture_string_content() {
+        let fixture = json!({
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "model": "local-model",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello from LM Studio"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": { "prompt_tokens": 8, "completion_tokens": 5 }
+        });
+        let parsed = parse_openai_chat_response(&fixture).expect("openai content");
+        assert_eq!(parsed.content, "Hello from LM Studio");
+        assert_eq!(parsed.finish_reason.as_deref(), Some("stop"));
+    }
+
+    #[test]
+    fn parse_openai_chat_fixture_multipart_content_array() {
+        // Root cause of many "(empty)" replies: content is an array of parts,
+        // and the old parser only accepted JSON strings via as_str().
+        let fixture = json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        { "type": "text", "text": "Part A. " },
+                        { "type": "text", "text": "Part B." }
+                    ]
+                },
+                "finish_reason": "stop"
+            }]
+        });
+        let parsed = parse_openai_chat_response(&fixture).expect("array content");
+        assert_eq!(parsed.content, "Part A. Part B.");
+    }
+
+    #[test]
+    fn parse_openai_stream_delta_fixture() {
+        let fixture = json!({
+            "choices": [{
+                "delta": { "content": "stream delta text" },
+                "finish_reason": null
+            }]
+        });
+        let parsed = parse_openai_chat_response(&fixture).expect("delta");
+        assert_eq!(parsed.content, "stream delta text");
+    }
+
+    #[test]
+    fn parse_openai_sse_ndjson_aggregates_deltas() {
+        let raw = "data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"!\"}}]}\n\ndata: [DONE]\n";
+        let value = parse_json_body(raw).expect("sse");
+        let parsed = parse_openai_chat_response(&value).expect("aggregated deltas");
+        assert_eq!(parsed.content, "Hi!");
+    }
+
+    #[test]
+    fn parse_openai_null_content_is_empty() {
+        let fixture = json!({
+            "choices": [{
+                "message": { "role": "assistant", "content": null },
+                "finish_reason": "stop"
+            }]
+        });
+        assert!(parse_openai_chat_response(&fixture).is_none());
+    }
+
+    #[test]
+    fn json_to_text_handles_nested_shapes() {
+        assert_eq!(json_to_text(&json!("plain")).as_deref(), Some("plain"));
+        assert_eq!(
+            json_to_text(&json!([{ "text": "a" }, { "text": "b" }])).as_deref(),
+            Some("ab")
+        );
+        assert_eq!(json_to_text(&json!({ "text": "obj" })).as_deref(), Some("obj"));
+        assert_eq!(json_to_text(&json!(null)), None);
     }
 }
