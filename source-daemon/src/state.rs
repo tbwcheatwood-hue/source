@@ -10,6 +10,8 @@ use crate::context::ContextCompactor;
 use crate::db::Db;
 use crate::llm::LlmRouter;
 use crate::mcp_host::McpHost;
+use crate::mesh::MeshService;
+use crate::orchestrator::Orchestrator;
 use crate::planact::PlanActMachine;
 use crate::policy::{PolicyEngine, PolicyHttpClient};
 use crate::pty_runner::PtyRunner;
@@ -33,6 +35,8 @@ pub struct AppState {
     pub templates: Arc<TemplateManager>,
     pub browser: Arc<HeadlessBrowser>,
     pub mcp: Arc<McpHost>,
+    pub mesh: Arc<MeshService>,
+    pub orchestrator: Arc<Orchestrator>,
     pub started: Instant,
     pub bind: String,
     pub static_dir: Option<PathBuf>,
@@ -108,6 +112,20 @@ impl AppState {
         )
         .await?;
 
+        let bind_port = bind
+            .rsplit(':')
+            .next()
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or(7420);
+        let mesh = MeshService::new(db.clone(), policy.clone(), bind_port, None).await?;
+        let orchestrator = Orchestrator::new(
+            db.clone(),
+            policy.clone(),
+            http.clone(),
+            Arc::clone(&llm),
+            Arc::clone(&mesh),
+        );
+
         Ok(Self {
             paths,
             db,
@@ -123,6 +141,8 @@ impl AppState {
             templates,
             browser,
             mcp,
+            mesh,
+            orchestrator,
             started: Instant::now(),
             bind,
             static_dir,

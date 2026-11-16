@@ -31,6 +31,15 @@ pub enum CoreError {
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
 
+    #[error("mesh disabled: {0}")]
+    MeshDisabled(String),
+
+    #[error("peer not found: {0}")]
+    PeerNotFound(String),
+
+    #[error("pairing failed: {0}")]
+    PairingFailed(String),
+
     #[error("{0}")]
     Other(String),
 }

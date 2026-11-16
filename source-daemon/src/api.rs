@@ -10,18 +10,22 @@ use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use source_core::error::CoreError;
+use source_core::mesh::{DEFAULT_MESH_PORT, PeerSource, RemoteInferRequest};
 use source_core::policy::{NetworkPolicy, NetworkTier};
 use source_core::protocol::{
-    AppVerifyParams, BrowserInspectParams, BrowserNavigateParams, BuildRepoMapParams,
-    CompactConversationParams, CompactTerminalParams, CreateCheckpointParams, CreateSessionParams,
+    AppVerifyParams, BeginPairingParams, BrowserInspectParams, BrowserNavigateParams,
+    BuildRepoMapParams, ClusterDispatchParams, CompactConversationParams, CompactTerminalParams,
+    CompletePairingParams, ConfirmPairingParams, CreateCheckpointParams, CreateSessionParams,
     EvaluateNetworkParams, InvokeToolParams, JsonRpcError, JsonRpcId, JsonRpcRequest,
-    JsonRpcResponse, ListAuditParams, McpCallParams, Method, NetworkTierResult, Notification,
-    ProviderIdParams, PtyIdParams, PtyOpenParams, PtyReadParams, PtyResizeParams, PtyWriteParams,
-    RagIndexParams, RagQueryParams, RequestApprovalParams, ResolveApprovalParams, RollbackParams,
-    SearchSymbolsParams, SessionIdParams, SetModeParams, SetNetworkTierParams,
-    TemplateScaffoldParams, PROTOCOL_VERSION,
+    JsonRpcResponse, ListAuditParams, ListTasksParams, McpCallParams, MeshStartParams, Method,
+    NetworkTierResult, Notification, PeerIdParams, ProviderIdParams, PtyIdParams, PtyOpenParams,
+    PtyReadParams, PtyResizeParams, PtyWriteParams, RagIndexParams, RagQueryParams,
+    RegisterPeerParams, RejectPairingParams, RequestApprovalParams, ResolveApprovalParams,
+    RollbackParams, SearchSymbolsParams, SessionIdParams, SetModeParams, SetNetworkTierParams,
+    TaskIdParams, TemplateScaffoldParams, TrustPeerParams, PROTOCOL_VERSION,
 };
 use crate::analyzer::SymbolSearchQuery;
+use crate::mesh::{PairAccept, SignedEnvelope};
 use source_core::types::{
     DaemonStatus, LlmProviderId, LlmRequest, Mode, ProviderConfig, ProviderStatus, SessionId,
     SessionMeta, ToolDefinition,
@@ -43,6 +47,10 @@ pub fn router(state: AppState) -> Router {
         .route("/ws", get(ws_upgrade))
         .route("/api/status", get(status_rest))
         .route("/api/network/tier", get(network_tier_rest))
+        .route("/api/cluster/resources", get(cluster_resources_rest))
+        .route("/mesh/pair/offer", get(mesh_pair_offer))
+        .route("/mesh/pair/accept", post(mesh_pair_accept))
+        .route("/mesh/rpc", post(mesh_rpc))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
@@ -84,6 +92,77 @@ async fn network_tier_rest(State(state): State<AppState>) -> impl IntoResponse {
         denylist: p.denylist,
         require_approval_for_public: p.require_approval_for_public,
     })
+}
+
+async fn cluster_resources_rest(State(state): State<AppState>) -> impl IntoResponse {
+    match state.orchestrator.cluster_snapshot().await {
+        Ok(snap) => (StatusCode::OK, Json(json!(snap))).into_response(),
+        Err(e) => (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn mesh_pair_offer(State(state): State<AppState>) -> impl IntoResponse {
+    // Return the most recently created pending pairing offer.
+    let status = state.mesh.status().await;
+    if !status.mesh_allowed {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "mesh disabled by network tier" })),
+        )
+            .into_response();
+    }
+    match newest_pair_offer(&state).await {
+        Ok(offer) => (StatusCode::OK, Json(json!(offer))).into_response(),
+        Err(e) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn newest_pair_offer(state: &AppState) -> Result<crate::mesh::PairOffer, CoreError> {
+    // begin_pairing stores pending; we keep last pairing_id in kv for HTTP discovery.
+    if let Ok(Some(v)) = state.db.get_kv("mesh:last_pairing_id").await {
+        if let Some(id) = v.as_str().and_then(|s| uuid::Uuid::parse_str(s).ok()) {
+            return state.mesh.get_pair_offer(id);
+        }
+    }
+    Err(CoreError::PairingFailed(
+        "no active pairing session; call source/mesh/beginPairing first".into(),
+    ))
+}
+
+async fn mesh_pair_accept(
+    State(state): State<AppState>,
+    Json(accept): Json<PairAccept>,
+) -> impl IntoResponse {
+    match state.mesh.accept_pair_offer(accept).await {
+        Ok(complete) => (StatusCode::OK, Json(json!(complete))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn mesh_rpc(
+    State(state): State<AppState>,
+    Json(env): Json<SignedEnvelope>,
+) -> impl IntoResponse {
+    match state.orchestrator.handle_inbound_rpc(env).await {
+        Ok(result) => (StatusCode::OK, Json(json!({ "result": result }))).into_response(),
+        Err(e) => (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 async fn rpc_http(
@@ -178,6 +257,9 @@ fn core_err(err: CoreError) -> JsonRpcError {
         CoreError::ProviderUnavailable(_) => -32005,
         CoreError::SessionNotFound(_) => -32006,
         CoreError::CheckpointNotFound(_) => -32007,
+        CoreError::MeshDisabled(_) => -32008,
+        CoreError::PeerNotFound(_) => -32009,
+        CoreError::PairingFailed(_) => -32010,
         CoreError::InvalidArgument(_) => -32602,
         _ => -32603,
     };
@@ -694,6 +776,218 @@ async fn handle_method(
                 .await
                 .map_err(core_err)?;
             Ok(json!(r))
+        }
+        Method::MeshStart => {
+            let p: MeshStartParams = serde_json::from_value(params.clone())
+                .unwrap_or(MeshStartParams {
+                    advertise: Some(true),
+                    browse: Some(true),
+                    role: None,
+                    label: None,
+                });
+            let status = state
+                .mesh
+                .start(
+                    p.advertise.unwrap_or(true),
+                    p.browse.unwrap_or(true),
+                    p.role,
+                    p.label,
+                )
+                .await
+                .map_err(core_err)?;
+            Ok(json!(status))
+        }
+        Method::MeshStop => {
+            let status = state.mesh.stop().await.map_err(core_err)?;
+            Ok(json!(status))
+        }
+        Method::MeshStatus => Ok(json!(state.mesh.status().await)),
+        Method::MeshDiscover => Ok(json!(state.mesh.list_discovered())),
+        Method::MeshRegisterPeer => {
+            let p: RegisterPeerParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let source = p.source.unwrap_or_else(|| {
+                if p.host.contains(".ts.net") || p.host.contains("tailscale") {
+                    PeerSource::Tailscale
+                } else {
+                    PeerSource::Manual
+                }
+            });
+            let info = state
+                .mesh
+                .register_peer(
+                    &p.host,
+                    p.port.unwrap_or(DEFAULT_MESH_PORT),
+                    p.label,
+                    source,
+                    p.peer_id,
+                )
+                .await
+                .map_err(core_err)?;
+            Ok(json!(info))
+        }
+        Method::MeshUnregisterPeer => {
+            let p: PeerIdParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            state
+                .mesh
+                .unregister_peer(&p.peer_id)
+                .await
+                .map_err(core_err)?;
+            Ok(json!({ "ok": true, "peer_id": p.peer_id }))
+        }
+        Method::MeshListPeers => {
+            let list = state.mesh.list_peers().await.map_err(core_err)?;
+            Ok(json!(list))
+        }
+        Method::MeshBeginPairing => {
+            let p: BeginPairingParams = serde_json::from_value(params.clone())
+                .unwrap_or(BeginPairingParams {
+                    label: None,
+                    ttl_secs: None,
+                });
+            let session = state
+                .mesh
+                .begin_pairing(p.label, p.ttl_secs)
+                .await
+                .map_err(core_err)?;
+            let _ = state
+                .db
+                .set_kv(
+                    "mesh:last_pairing_id",
+                    &json!(session.pairing_id.to_string()),
+                )
+                .await;
+            Ok(json!(session))
+        }
+        Method::MeshConfirmPairing => {
+            let p: ConfirmPairingParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let info = state
+                .mesh
+                .confirm_pairing(
+                    p.pairing_id,
+                    &p.peer_id,
+                    &p.peer_public_key,
+                    &p.pin,
+                    p.label,
+                    p.address,
+                    p.port,
+                )
+                .await
+                .map_err(core_err)?;
+            Ok(json!(info))
+        }
+        Method::MeshCompletePairing => {
+            let p: CompletePairingParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let info = state
+                .mesh
+                .complete_pairing_remote(
+                    &p.host,
+                    p.port.unwrap_or(DEFAULT_MESH_PORT),
+                    &p.pin,
+                    p.label,
+                    state.http.raw(),
+                )
+                .await
+                .map_err(core_err)?;
+            Ok(json!(info))
+        }
+        Method::MeshRejectPairing => {
+            let p: RejectPairingParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            state
+                .mesh
+                .reject_pairing(p.pairing_id)
+                .await
+                .map_err(core_err)?;
+            Ok(json!({ "ok": true }))
+        }
+        Method::MeshTrustPeer => {
+            let p: TrustPeerParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let info = state
+                .mesh
+                .set_trusted(&p.peer_id, p.trusted)
+                .await
+                .map_err(core_err)?;
+            Ok(json!(info))
+        }
+        Method::MeshRevokePeer => {
+            let p: PeerIdParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let info = state
+                .mesh
+                .set_trusted(&p.peer_id, false)
+                .await
+                .map_err(core_err)?;
+            Ok(json!(info))
+        }
+        Method::ClusterResources => {
+            let snap = state
+                .orchestrator
+                .cluster_snapshot()
+                .await
+                .map_err(core_err)?;
+            Ok(json!(snap))
+        }
+        Method::ClusterDispatch => {
+            let p: ClusterDispatchParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let result = state
+                .orchestrator
+                .dispatch(p.tasks, p.parallel.unwrap_or(true), p.session_id)
+                .await
+                .map_err(core_err)?;
+            Ok(json!(result))
+        }
+        Method::ClusterTaskStatus => {
+            let p: TaskIdParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let info = state
+                .orchestrator
+                .task_status(p.task_id)
+                .await
+                .map_err(core_err)?;
+            Ok(json!(info))
+        }
+        Method::ClusterCancelTask => {
+            let p: TaskIdParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let info = state
+                .orchestrator
+                .cancel_task(p.task_id)
+                .await
+                .map_err(core_err)?;
+            Ok(json!(info))
+        }
+        Method::ClusterListTasks => {
+            let p: ListTasksParams = serde_json::from_value(params.clone()).unwrap_or(
+                ListTasksParams {
+                    include_completed: Some(true),
+                    limit: Some(100),
+                },
+            );
+            let list = state
+                .orchestrator
+                .list_tasks(
+                    p.include_completed.unwrap_or(true),
+                    p.limit.unwrap_or(100),
+                )
+                .await
+                .map_err(core_err)?;
+            Ok(json!(list))
+        }
+        Method::LlmCompleteRemote => {
+            let p: RemoteInferRequest = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let resp = state
+                .orchestrator
+                .complete_remote(p, None)
+                .await
+                .map_err(core_err)?;
+            Ok(json!(resp))
         }
     }
 }
