@@ -179,6 +179,22 @@ impl Db {
         row.map(row_to_session).transpose()
     }
 
+    pub async fn update_session_provider(
+        &self,
+        id: &SessionId,
+        provider_id: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE sessions SET provider_id = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(provider_id)
+        .bind(Utc::now().to_rfc3339())
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn update_session_mode(&self, id: &SessionId, mode: Mode) -> Result<()> {
         sqlx::query("UPDATE sessions SET mode = ?, updated_at = ? WHERE id = ?")
             .bind(mode.as_str())

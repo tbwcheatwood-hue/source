@@ -2,14 +2,20 @@
 
 use anyhow::Result;
 use source_core::error::CoreError;
+use source_core::protocol::{
+    ListModelsResult, ProbeProviderParams, ProviderProbeResult, SelectedProviderResult,
+};
 use source_core::types::{
     AuditEvent, AuditEventKind, LlmMessage, LlmProviderId, LlmProviderKind, LlmRequest, LlmResponse,
     LlmRole, ProviderConfig, SessionId,
 };
+use std::time::Instant;
 use uuid::Uuid;
 
 use crate::db::Db;
 use crate::policy::{PolicyEngine, PolicyHttpClient};
+
+pub const SELECTED_PROVIDER_KV: &str = "selected_provider_id";
 
 pub struct LlmRouter {
     db: Db,
@@ -45,6 +51,305 @@ impl LlmRouter {
             }
         }
         self.db.set_provider_enabled(id, enabled).await
+    }
+
+    /// Resolve which provider Chat / Complete should use when the request omits an id.
+    pub async fn resolve_provider_id(
+        &self,
+        requested: &str,
+        session_id: Option<&SessionId>,
+    ) -> Result<String, CoreError> {
+        let trimmed = requested.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+        if let Some(sid) = session_id {
+            if let Ok(Some(sess)) = self.db.get_session(sid).await {
+                if let Some(pid) = sess.provider_id {
+                    if !pid.0.is_empty() {
+                        return Ok(pid.0);
+                    }
+                }
+            }
+        }
+        if let Some(selected) = self
+            .get_selected_provider()
+            .await
+            .map_err(|e| CoreError::Other(e.to_string()))?
+            .provider_id
+        {
+            return Ok(selected);
+        }
+        // Prefer first enabled local provider; fall back to seeded ollama id.
+        let providers = self
+            .list()
+            .await
+            .map_err(|e| CoreError::Other(e.to_string()))?;
+        if let Some(p) = providers
+            .iter()
+            .find(|p| p.enabled && p.kind.is_local())
+            .or_else(|| providers.iter().find(|p| p.enabled))
+        {
+            return Ok(p.id.0.clone());
+        }
+        Ok("ollama-local".into())
+    }
+
+    pub async fn get_selected_provider(&self) -> Result<SelectedProviderResult> {
+        let provider_id = match self.db.get_kv(SELECTED_PROVIDER_KV).await? {
+            Some(v) => v
+                .as_str()
+                .map(|s| s.to_string())
+                .or_else(|| v.get("provider_id").and_then(|x| x.as_str()).map(|s| s.to_string())),
+            None => None,
+        };
+        let provider = match &provider_id {
+            Some(id) => self.db.get_provider(id).await?,
+            None => None,
+        };
+        Ok(SelectedProviderResult {
+            provider_id,
+            provider,
+        })
+    }
+
+    pub async fn set_selected_provider(&self, provider_id: &str) -> Result<SelectedProviderResult> {
+        let provider = self
+            .db
+            .get_provider(provider_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("provider `{provider_id}` not found"))?;
+        self.db
+            .set_kv(SELECTED_PROVIDER_KV, &serde_json::json!(provider_id))
+            .await?;
+        Ok(SelectedProviderResult {
+            provider_id: Some(provider_id.to_string()),
+            provider: Some(provider),
+        })
+    }
+
+    pub async fn list_models(&self, provider_id: &str) -> Result<ListModelsResult, CoreError> {
+        let provider = self
+            .db
+            .get_provider(provider_id)
+            .await
+            .map_err(|e| CoreError::Other(e.to_string()))?
+            .ok_or_else(|| CoreError::ProviderUnavailable(provider_id.to_string()))?;
+        let models = self
+            .fetch_models(&provider.kind, &provider.base_url, provider.api_key_env.as_deref(), None)
+            .await?;
+        Ok(ListModelsResult {
+            provider_id: provider.id.0.clone(),
+            base_url: provider.base_url,
+            kind: provider.kind,
+            models,
+        })
+    }
+
+    pub async fn probe(
+        &self,
+        params: ProbeProviderParams,
+        session_id: Option<SessionId>,
+    ) -> Result<ProviderProbeResult, CoreError> {
+        let (provider_id, kind, base_url, api_key_env) =
+            self.resolve_probe_target(&params).await?;
+        let tier = self.policy.tier();
+        let started = Instant::now();
+
+        // Pre-check policy so the UI can show LOCAL_ONLY impact even when the probe fails.
+        let network_allowed = match self
+            .http
+            .policy
+            .assert_url_allowed(&base_url, session_id.clone(), "llm-probe")
+            .await
+        {
+            Ok(()) => true,
+            Err(CoreError::NetworkBlocked(_)) | Err(CoreError::ApprovalRequired(_)) => false,
+            Err(e) => {
+                return Ok(ProviderProbeResult {
+                    ok: false,
+                    latency_ms: started.elapsed().as_millis() as u64,
+                    provider_id,
+                    base_url,
+                    kind,
+                    models: vec![],
+                    error: Some(e.to_string()),
+                    tier,
+                    network_allowed: false,
+                });
+            }
+        };
+
+        if !network_allowed {
+            return Ok(ProviderProbeResult {
+                ok: false,
+                latency_ms: started.elapsed().as_millis() as u64,
+                provider_id,
+                base_url: base_url.clone(),
+                kind,
+                models: vec![],
+                error: Some(format!(
+                    "network tier {tier} blocks `{base_url}` (LOCAL_ONLY allows localhost only)"
+                )),
+                tier,
+                network_allowed: false,
+            });
+        }
+
+        match self
+            .fetch_models(&kind, &base_url, api_key_env.as_deref(), session_id)
+            .await
+        {
+            Ok(models) => Ok(ProviderProbeResult {
+                ok: true,
+                latency_ms: started.elapsed().as_millis() as u64,
+                provider_id,
+                base_url,
+                kind,
+                models,
+                error: None,
+                tier,
+                network_allowed: true,
+            }),
+            Err(e) => Ok(ProviderProbeResult {
+                ok: false,
+                latency_ms: started.elapsed().as_millis() as u64,
+                provider_id,
+                base_url,
+                kind,
+                models: vec![],
+                error: Some(e.to_string()),
+                tier,
+                network_allowed: true,
+            }),
+        }
+    }
+
+    async fn resolve_probe_target(
+        &self,
+        params: &ProbeProviderParams,
+    ) -> Result<(Option<String>, LlmProviderKind, String, Option<String>), CoreError> {
+        if let Some(id) = params.provider_id.as_deref().filter(|s| !s.is_empty()) {
+            let provider = self
+                .db
+                .get_provider(id)
+                .await
+                .map_err(|e| CoreError::Other(e.to_string()))?
+                .ok_or_else(|| CoreError::ProviderUnavailable(id.to_string()))?;
+            let kind = params.kind.unwrap_or(provider.kind);
+            let base_url = params
+                .base_url
+                .clone()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or(provider.base_url);
+            let api_key_env = params
+                .api_key_env
+                .clone()
+                .or(provider.api_key_env);
+            return Ok((Some(provider.id.0), kind, base_url, api_key_env));
+        }
+        let kind = params.kind.unwrap_or(LlmProviderKind::Ollama);
+        let base_url = params.base_url.clone().unwrap_or_else(|| match kind {
+            LlmProviderKind::Ollama => "http://127.0.0.1:11434".into(),
+            LlmProviderKind::LmStudio => "http://127.0.0.1:1234/v1".into(),
+            _ => "http://127.0.0.1:11434".into(),
+        });
+        Ok((None, kind, base_url, params.api_key_env.clone()))
+    }
+
+    async fn fetch_models(
+        &self,
+        kind: &LlmProviderKind,
+        base_url: &str,
+        api_key_env: Option<&str>,
+        session_id: Option<SessionId>,
+    ) -> Result<Vec<String>, CoreError> {
+        match kind {
+            LlmProviderKind::Ollama => {
+                self.fetch_ollama_tags(base_url, session_id).await
+            }
+            LlmProviderKind::LmStudio
+            | LlmProviderKind::LlamaCpp
+            | LlmProviderKind::OpenaiCompatible
+            | LlmProviderKind::Openai
+            | LlmProviderKind::OpenRouter
+            | LlmProviderKind::Custom => {
+                self.fetch_openai_models(base_url, api_key_env, session_id)
+                    .await
+            }
+            other => Err(CoreError::Other(format!(
+                "model listing is not supported for provider kind {other:?}"
+            ))),
+        }
+    }
+
+    async fn fetch_ollama_tags(
+        &self,
+        base_url: &str,
+        session_id: Option<SessionId>,
+    ) -> Result<Vec<String>, CoreError> {
+        let url = join_url(base_url, "api/tags");
+        let resp = self
+            .http
+            .request_json(
+                reqwest::Method::GET,
+                &url,
+                &[],
+                None,
+                session_id,
+                "llm-ollama-tags",
+            )
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(CoreError::Other(format!(
+                "ollama /api/tags returned {status}: {text}"
+            )));
+        }
+        let value: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| CoreError::Other(e.to_string()))?;
+        Ok(parse_ollama_tags(&value))
+    }
+
+    async fn fetch_openai_models(
+        &self,
+        base_url: &str,
+        api_key_env: Option<&str>,
+        session_id: Option<SessionId>,
+    ) -> Result<Vec<String>, CoreError> {
+        let url = join_url(base_url, "models");
+        let mut headers: Vec<(String, String)> = Vec::new();
+        if let Some(env_name) = api_key_env {
+            if let Ok(key) = std::env::var(env_name) {
+                headers.push(("Authorization".into(), format!("Bearer {key}")));
+            }
+        }
+        let resp = self
+            .http
+            .request_json(
+                reqwest::Method::GET,
+                &url,
+                &headers,
+                None,
+                session_id,
+                "llm-openai-models",
+            )
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(CoreError::Other(format!(
+                "models endpoint returned {status}: {text}"
+            )));
+        }
+        let value: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| CoreError::Other(e.to_string()))?;
+        Ok(parse_openai_models(&value))
     }
 
     pub async fn complete(
@@ -427,7 +732,7 @@ fn messages_openai(messages: &[LlmMessage]) -> Vec<serde_json::Value> {
 
 fn join_url(base: &str, path: &str) -> String {
     let base = base.trim_end_matches('/');
-    if base.ends_with("/v1") && path.starts_with("chat/") {
+    if base.ends_with("/v1") && (path.starts_with("chat/") || path == "models") {
         format!("{base}/{path}")
     } else if path.starts_with("v1/") || path.starts_with("api/") {
         format!("{base}/{path}")
@@ -435,5 +740,80 @@ fn join_url(base: &str, path: &str) -> String {
         format!("{base}/{path}")
     } else {
         format!("{base}/{path}")
+    }
+}
+
+fn parse_ollama_tags(value: &serde_json::Value) -> Vec<String> {
+    value
+        .get("models")
+        .and_then(|m| m.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| {
+                    m.get("name")
+                        .or_else(|| m.get("model"))
+                        .and_then(|n| n.as_str())
+                        .map(|s| s.to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_openai_models(value: &serde_json::Value) -> Vec<String> {
+    value
+        .get("data")
+        .and_then(|d| d.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m.get("id").and_then(|n| n.as_str()).map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn join_url_ollama_and_lmstudio() {
+        assert_eq!(
+            join_url("http://127.0.0.1:11434", "api/tags"),
+            "http://127.0.0.1:11434/api/tags"
+        );
+        assert_eq!(
+            join_url("http://127.0.0.1:1234/v1", "models"),
+            "http://127.0.0.1:1234/v1/models"
+        );
+        assert_eq!(
+            join_url("http://127.0.0.1:1234/v1", "chat/completions"),
+            "http://127.0.0.1:1234/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn parse_model_catalogs() {
+        let ollama = json!({
+            "models": [
+                { "name": "llama3.2:latest" },
+                { "name": "codellama:7b" }
+            ]
+        });
+        assert_eq!(
+            parse_ollama_tags(&ollama),
+            vec!["llama3.2:latest", "codellama:7b"]
+        );
+        let openai = json!({
+            "data": [
+                { "id": "local-model" },
+                { "id": "qwen2.5-coder" }
+            ]
+        });
+        assert_eq!(
+            parse_openai_models(&openai),
+            vec!["local-model", "qwen2.5-coder"]
+        );
     }
 }

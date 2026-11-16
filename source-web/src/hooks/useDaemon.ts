@@ -25,6 +25,7 @@ export function useDaemon() {
   const [error, setError] = useState<string | null>(null);
   const [helloTier, setHelloTier] = useState<NetworkTier | null>(null);
   const [session, setSession] = useState<SessionMeta | null>(null);
+  const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
   const [workspaceRoot, setWorkspaceRootState] = useState(defaultWorkspace);
 
   const setWorkspaceRoot = useCallback((root: string) => {
@@ -56,9 +57,16 @@ export function useDaemon() {
 
   const refresh = useCallback(async () => {
     try {
-      const [s, t] = await Promise.all([client.status(), client.getNetworkTier()]);
+      const [s, t, selected] = await Promise.all([
+        client.status(),
+        client.getNetworkTier(),
+        client.getSelectedProvider().catch(() => null),
+      ]);
       setStatus(s);
       setTierInfo(t);
+      if (selected) {
+        setSelectedProviderId(selected.provider_id ?? null);
+      }
       setError(null);
       try {
         await ensureSession();
@@ -108,6 +116,9 @@ export function useDaemon() {
     helloTier,
     error,
     session,
+    setSession,
+    selectedProviderId,
+    setSelectedProviderId,
     workspaceRoot,
     setWorkspaceRoot,
     ensureSession,

@@ -11,12 +11,14 @@ export function ChatPanel({
   client,
   session,
   mode,
+  selectedProviderId,
   ensureSession,
   setMode,
 }: {
   client: SourceClient;
   session: SessionMeta | null;
   mode: Mode;
+  selectedProviderId: string | null;
   ensureSession: () => Promise<SessionMeta>;
   setMode: (mode: Mode) => Promise<void>;
 }) {
@@ -24,12 +26,17 @@ export function ChatPanel({
     {
       role: "system",
       content:
-        "Plan/Act agent panel. Plan is read-only; Act can invoke tools after approvals. Completions go through source/llm/complete.",
+        "Plan/Act agent panel. Plan is read-only; Act can invoke tools after approvals. Completions go through source/llm/complete using the selected local provider.",
     },
   ]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const activeProvider =
+    session?.provider_id?.trim() ||
+    selectedProviderId?.trim() ||
+    "";
 
   const send = async (e: FormEvent) => {
     e.preventDefault();
@@ -45,17 +52,28 @@ export function ChatPanel({
       const messages: LlmMessage[] = nextTurns
         .filter((t) => t.role !== "system")
         .map((t) => ({ role: t.role, content: t.content }));
+      const providerId =
+        sess.provider_id?.trim() ||
+        selectedProviderId?.trim() ||
+        "";
       messages.unshift({
         role: "system",
-        content: `You are Source IDE agent in ${mode} mode. Workspace: ${sess.workspace_root}. Be concise.`,
+        content: `You are Source IDE agent in ${mode} mode. Workspace: ${sess.workspace_root}. Provider: ${providerId || "(daemon default)"}. Be concise.`,
       });
       const resp = await client.complete({
-        provider_id: "ollama-local",
+        // Empty id lets the daemon resolve selected / session / first enabled local provider.
+        provider_id: providerId,
         messages,
         temperature: 0.2,
         max_tokens: 1024,
       });
-      setTurns((prev) => [...prev, { role: "assistant", content: resp.content || "(empty)" }]);
+      setTurns((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: resp.content || "(empty)",
+        },
+      ]);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
@@ -63,7 +81,7 @@ export function ChatPanel({
         ...prev,
         {
           role: "assistant",
-          content: `LLM call failed: ${msg}\nEnable a local provider (Ollama) or check network tier.`,
+          content: `LLM call failed: ${msg}\nEnable a local provider (Ollama or LM Studio) in Settings, then Test connection.`,
         },
       ]);
     } finally {
@@ -78,6 +96,7 @@ export function ChatPanel({
           <p className="font-display text-lg text-ink-100">Plan · Act</p>
           <p className="font-mono text-[10px] text-ink-500">
             {session ? session.id.slice(0, 8) : "no session"}
+            {activeProvider ? ` · ${activeProvider}` : " · provider auto"}
           </p>
         </div>
         <div className="inline-flex overflow-hidden rounded-md ring-1 ring-white/15">

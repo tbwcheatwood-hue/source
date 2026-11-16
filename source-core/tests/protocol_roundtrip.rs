@@ -13,10 +13,15 @@ fn method_names_roundtrip() {
         Method::MeshStart,
         Method::ClusterResources,
         Method::LlmCompleteRemote,
+        Method::ProbeProvider,
+        Method::ListModels,
+        Method::GetSelectedProvider,
+        Method::SetSelectedProvider,
+        Method::SetSessionProvider,
     ] {
         assert_eq!(Method::parse(m.as_str()), Some(m));
     }
-    assert_eq!(PROTOCOL_VERSION, "1.2.0");
+    assert_eq!(PROTOCOL_VERSION, "1.3.0");
 }
 
 #[test]

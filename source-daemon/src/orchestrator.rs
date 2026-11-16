@@ -308,8 +308,13 @@ impl Orchestrator {
                 Ok(json!(self.collect_local_resources()))
             }
             "mesh/infer" => {
-                let req: LlmRequest = serde_json::from_value(env.params)
+                let mut req: LlmRequest = serde_json::from_value(env.params)
                     .map_err(|e| CoreError::InvalidArgument(e.to_string()))?;
+                let resolved = self
+                    .llm
+                    .resolve_provider_id(&req.provider_id.0, None)
+                    .await?;
+                req.provider_id = LlmProviderId::new(resolved);
                 self.active_remote.fetch_add(1, Ordering::SeqCst);
                 let result = self.llm.complete(req, None).await;
                 self.active_remote.fetch_sub(1, Ordering::SeqCst);
@@ -340,14 +345,12 @@ impl Orchestrator {
             RemoteTaskKind::Infer => {
                 let mut req: LlmRequest = serde_json::from_value(spec.payload.clone())
                     .map_err(|e| CoreError::InvalidArgument(e.to_string()))?;
-                if let Some(model) = &spec.required_model {
-                    // Prefer matching local provider model name.
-                    req.provider_id = LlmProviderId::new("ollama-local");
-                    let _ = model;
-                }
-                if req.provider_id.0.is_empty() {
-                    req.provider_id = LlmProviderId::new("ollama-local");
-                }
+                let _ = &spec.required_model;
+                let resolved = self
+                    .llm
+                    .resolve_provider_id(&req.provider_id.0, None)
+                    .await?;
+                req.provider_id = LlmProviderId::new(resolved);
                 let resp = self.llm.complete(req, None).await?;
                 Ok(json!(resp))
             }

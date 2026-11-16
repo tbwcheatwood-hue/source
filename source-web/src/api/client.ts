@@ -12,6 +12,11 @@ import {
   AuditEvent,
   LlmRequest,
   LlmResponse,
+  ProviderConfig,
+  ProbeProviderParams,
+  ProviderProbeResult,
+  ListModelsResult,
+  SelectedProviderResult,
   ToolDefinition,
   ToolCall,
   ToolResult,
@@ -232,6 +237,45 @@ export class SourceClient {
 
   complete(req: LlmRequest): Promise<LlmResponse> {
     return this.rpc(Methods.Complete, req);
+  }
+
+  listProviders(): Promise<ProviderConfig[]> {
+    return this.rpc(Methods.ListProviders);
+  }
+
+  upsertProvider(config: ProviderConfig): Promise<ProviderConfig> {
+    return this.rpc(Methods.UpsertProvider, config);
+  }
+
+  enableProvider(providerId: string): Promise<{ provider_id: string; enabled: boolean }> {
+    return this.rpc(Methods.EnableProvider, { provider_id: providerId });
+  }
+
+  disableProvider(providerId: string): Promise<{ provider_id: string; enabled: boolean }> {
+    return this.rpc(Methods.DisableProvider, { provider_id: providerId });
+  }
+
+  probeProvider(params: ProbeProviderParams): Promise<ProviderProbeResult> {
+    return this.rpc(Methods.ProbeProvider, params);
+  }
+
+  listModels(providerId: string): Promise<ListModelsResult> {
+    return this.rpc(Methods.ListModels, { provider_id: providerId });
+  }
+
+  getSelectedProvider(): Promise<SelectedProviderResult> {
+    return this.rpc(Methods.GetSelectedProvider);
+  }
+
+  setSelectedProvider(providerId: string): Promise<SelectedProviderResult> {
+    return this.rpc(Methods.SetSelectedProvider, { provider_id: providerId });
+  }
+
+  setSessionProvider(sessionId: string, providerId: string): Promise<SessionMeta> {
+    return this.rpc(Methods.SetSessionProvider, {
+      session_id: sessionId,
+      provider_id: providerId,
+    });
   }
 
   listTools(): Promise<ToolDefinition[]> {

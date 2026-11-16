@@ -1,6 +1,6 @@
-/** TypeScript mirrors of source-core protocol types (kept in sync by hand). Protocol 1.2.0. */
+/** TypeScript mirrors of source-core protocol types (kept in sync by hand). Protocol 1.3.0. */
 
-export const PROTOCOL_VERSION = "1.2.0";
+export const PROTOCOL_VERSION = "1.3.0";
 
 export type NetworkTier =
   | "LOCAL_ONLY"
@@ -102,6 +102,28 @@ export interface AuditEvent {
   created_at: string;
 }
 
+export type LlmProviderKind =
+  | "openai_compatible"
+  | "ollama"
+  | "llama_cpp"
+  | "lm_studio"
+  | "anthropic"
+  | "openai"
+  | "gemini"
+  | "open_router"
+  | "custom";
+
+export interface ProviderConfig {
+  id: string;
+  kind: LlmProviderKind | string;
+  display_name: string;
+  base_url: string;
+  model: string;
+  api_key_env: string | null;
+  enabled: boolean;
+  extra_headers: Record<string, string>;
+}
+
 export interface LlmMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
@@ -124,6 +146,37 @@ export interface LlmResponse {
   prompt_tokens: number | null;
   completion_tokens: number | null;
   finish_reason: string | null;
+}
+
+export interface ProbeProviderParams {
+  provider_id?: string | null;
+  kind?: LlmProviderKind | string | null;
+  base_url?: string | null;
+  api_key_env?: string | null;
+}
+
+export interface ProviderProbeResult {
+  ok: boolean;
+  latency_ms: number;
+  provider_id?: string | null;
+  base_url: string;
+  kind: LlmProviderKind | string;
+  models: string[];
+  error?: string | null;
+  tier: NetworkTier;
+  network_allowed: boolean;
+}
+
+export interface ListModelsResult {
+  provider_id: string;
+  base_url: string;
+  kind: LlmProviderKind | string;
+  models: string[];
+}
+
+export interface SelectedProviderResult {
+  provider_id?: string | null;
+  provider?: ProviderConfig | null;
 }
 
 export interface ToolCall {
@@ -160,6 +213,14 @@ export const Methods = {
   GetSession: "source/session/get",
   SetMode: "source/mode/set",
   ListProviders: "source/llm/listProviders",
+  UpsertProvider: "source/llm/upsertProvider",
+  EnableProvider: "source/llm/enableProvider",
+  DisableProvider: "source/llm/disableProvider",
+  ProbeProvider: "source/llm/probeProvider",
+  ListModels: "source/llm/listModels",
+  GetSelectedProvider: "source/llm/getSelectedProvider",
+  SetSelectedProvider: "source/llm/setSelectedProvider",
+  SetSessionProvider: "source/session/setProvider",
   Complete: "source/llm/complete",
   CreateCheckpoint: "source/checkpoint/create",
   ListCheckpoints: "source/checkpoint/list",

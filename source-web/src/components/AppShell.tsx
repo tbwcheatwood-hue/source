@@ -8,6 +8,7 @@ import { EditorPanel } from "./EditorPanel";
 import { MeshClusterPanel } from "./MeshClusterPanel";
 import { NetworkTierSwitch } from "./NetworkTierSwitch";
 import { TerminalPanel } from "./TerminalPanel";
+import { SettingsProvidersPanel } from "./SettingsProvidersPanel";
 import { ToolsMcpPanel } from "./ToolsMcpPanel";
 
 export function AppShell() {
@@ -21,6 +22,9 @@ export function AppShell() {
     helloTier,
     error,
     session,
+    setSession,
+    selectedProviderId,
+    setSelectedProviderId,
     workspaceRoot,
     setWorkspaceRoot,
     ensureSession,
@@ -114,6 +118,16 @@ export function AppShell() {
               <DocsTemplatesPanel client={client} workspaceRoot={workspaceRoot} />
             ) : null}
             {panel === "tools" ? <ToolsMcpPanel client={client} /> : null}
+            {panel === "settings" ? (
+              <SettingsProvidersPanel
+                client={client}
+                tier={tier}
+                session={session}
+                selectedProviderId={selectedProviderId}
+                onSelectedProviderChange={setSelectedProviderId}
+                onSessionChange={setSession}
+              />
+            ) : null}
           </div>
 
           {termOpen ? (
@@ -127,6 +141,7 @@ export function AppShell() {
           client={client}
           session={session}
           mode={mode}
+          selectedProviderId={selectedProviderId}
           ensureSession={ensureSession}
           setMode={setMode}
         />
