@@ -42,13 +42,9 @@ sha2 = "0.10"
 hex = "0.4"
 dirs = "6"
 clap = { version = "4", features = ["derive", "env"] }
-bytes = "1"
 url = "2"
-base64 = "0.22"
 tempfile = "3"
-walkdir = "2"
 ignore = "0.4"
 regex = "1"
 parking_lot = "0.12"
-http = "1"
 schemars = { version = "0.8", features = ["chrono", "uuid1"] }
