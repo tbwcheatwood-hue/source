@@ -46,12 +46,28 @@ impl Db {
     }
 
     async fn migrate(&self) -> Result<()> {
-        let sql = include_str!("../migrations/001_init.sql");
-        // sqlx migrate! needs a folder at compile time; execute bundled SQL for portability.
-        for stmt in split_sql(sql) {
-            sqlx::query(stmt).execute(&self.pool).await.with_context(|| {
-                format!("migration statement failed: {}", &stmt[..stmt.len().min(80)])
-            })?;
+        for sql in [
+            include_str!("../migrations/001_init.sql"),
+            include_str!("../migrations/002_phase3.sql"),
+        ] {
+            for stmt in split_sql(sql) {
+                // ALTER TABLE ADD COLUMN may fail if already applied — ignore duplicate column.
+                match sqlx::query(&stmt).execute(&self.pool).await {
+                    Ok(_) => {}
+                    Err(err) => {
+                        let msg = err.to_string();
+                        if msg.contains("duplicate column") || msg.contains("already exists") {
+                            continue;
+                        }
+                        return Err(err).with_context(|| {
+                            format!(
+                                "migration statement failed: {}",
+                                &stmt[..stmt.len().min(80)]
+                            )
+                        });
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -328,13 +344,15 @@ impl Db {
 
     pub async fn register_tool(&self, tool: &ToolDefinition) -> Result<()> {
         sqlx::query(
-            "INSERT INTO tool_registry (name, description, input_schema_json, categories_json, enabled, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?)
+            "INSERT INTO tool_registry (name, description, input_schema_json, categories_json, enabled, offline_capable, requires_wan, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(name) DO UPDATE SET
                description=excluded.description,
                input_schema_json=excluded.input_schema_json,
                categories_json=excluded.categories_json,
                enabled=excluded.enabled,
+               offline_capable=excluded.offline_capable,
+               requires_wan=excluded.requires_wan,
                updated_at=excluded.updated_at",
         )
         .bind(&tool.name)
@@ -342,6 +360,8 @@ impl Db {
         .bind(tool.input_schema.to_string())
         .bind(serde_json::to_string(&tool.categories)?)
         .bind(if tool.enabled { 1 } else { 0 })
+        .bind(if tool.offline_capable { 1 } else { 0 })
+        .bind(if tool.requires_wan { 1 } else { 0 })
         .bind(Utc::now().to_rfc3339())
         .execute(&self.pool)
         .await?;
@@ -350,7 +370,7 @@ impl Db {
 
     pub async fn list_tools(&self) -> Result<Vec<ToolDefinition>> {
         let rows = sqlx::query(
-            "SELECT name, description, input_schema_json, categories_json, enabled FROM tool_registry ORDER BY name",
+            "SELECT name, description, input_schema_json, categories_json, enabled, offline_capable, requires_wan FROM tool_registry ORDER BY name",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -359,7 +379,7 @@ impl Db {
 
     pub async fn get_tool(&self, name: &str) -> Result<Option<ToolDefinition>> {
         let row = sqlx::query(
-            "SELECT name, description, input_schema_json, categories_json, enabled FROM tool_registry WHERE name = ?",
+            "SELECT name, description, input_schema_json, categories_json, enabled, offline_capable, requires_wan FROM tool_registry WHERE name = ?",
         )
         .bind(name)
         .fetch_optional(&self.pool)
@@ -493,10 +513,18 @@ impl Db {
     }
 }
 
-fn split_sql(sql: &str) -> Vec<&str> {
+fn split_sql(sql: &str) -> Vec<String> {
     sql.split(';')
-        .map(str::trim)
-        .filter(|s| !s.is_empty() && !s.starts_with("--") && !s.starts_with("PRAGMA"))
+        .map(|chunk| {
+            // Drop full-line `--` comments so leading banners do not swallow ALTER statements.
+            chunk
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("--"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && !s.starts_with("PRAGMA"))
         .collect()
 }
 
@@ -593,12 +621,16 @@ fn row_to_checkpoint(row: sqlx::sqlite::SqliteRow) -> Result<CheckpointMeta> {
 
 fn row_to_tool(row: sqlx::sqlite::SqliteRow) -> Result<ToolDefinition> {
     let enabled: i64 = row.try_get("enabled")?;
+    let offline_capable: i64 = row.try_get("offline_capable").unwrap_or(1);
+    let requires_wan: i64 = row.try_get("requires_wan").unwrap_or(0);
     Ok(ToolDefinition {
         name: row.try_get("name")?,
         description: row.try_get("description")?,
         input_schema: serde_json::from_str(&row.try_get::<String, _>("input_schema_json")?)?,
         categories: serde_json::from_str(&row.try_get::<String, _>("categories_json")?)?,
         enabled: enabled != 0,
+        offline_capable: offline_capable != 0,
+        requires_wan: requires_wan != 0,
     })
 }
 

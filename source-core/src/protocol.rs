@@ -9,7 +9,7 @@ use crate::types::{
     SessionId, SessionMeta, ToolCall, ToolDefinition, ToolResult,
 };
 
-pub const PROTOCOL_VERSION: &str = "1.0.0";
+pub const PROTOCOL_VERSION: &str = "1.1.0";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
@@ -170,6 +170,26 @@ pub enum Method {
     InvokeTool,
     EvaluateNetwork,
     ListAuditEvents,
+    // Phase 3
+    SearchSymbols,
+    PtyOpen,
+    PtyWrite,
+    PtyRead,
+    PtyResize,
+    PtyClose,
+    PtyList,
+    RagIndex,
+    RagQuery,
+    RagStatus,
+    TemplateList,
+    TemplateScaffold,
+    CacheVendorStatus,
+    McpList,
+    McpReload,
+    McpCall,
+    BrowserNavigate,
+    BrowserInspect,
+    AppVerify,
 }
 
 impl Method {
@@ -201,6 +221,25 @@ impl Method {
             Self::InvokeTool => "source/tools/invoke",
             Self::EvaluateNetwork => "source/network/evaluate",
             Self::ListAuditEvents => "source/audit/list",
+            Self::SearchSymbols => "source/context/searchSymbols",
+            Self::PtyOpen => "source/pty/open",
+            Self::PtyWrite => "source/pty/write",
+            Self::PtyRead => "source/pty/read",
+            Self::PtyResize => "source/pty/resize",
+            Self::PtyClose => "source/pty/close",
+            Self::PtyList => "source/pty/list",
+            Self::RagIndex => "source/rag/index",
+            Self::RagQuery => "source/rag/query",
+            Self::RagStatus => "source/rag/status",
+            Self::TemplateList => "source/templates/list",
+            Self::TemplateScaffold => "source/templates/scaffold",
+            Self::CacheVendorStatus => "source/cache/vendorStatus",
+            Self::McpList => "source/mcp/list",
+            Self::McpReload => "source/mcp/reload",
+            Self::McpCall => "source/mcp/call",
+            Self::BrowserNavigate => "source/browser/navigate",
+            Self::BrowserInspect => "source/browser/inspect",
+            Self::AppVerify => "source/browser/verifyApp",
         }
     }
 
@@ -232,6 +271,25 @@ impl Method {
             "source/tools/invoke" => Self::InvokeTool,
             "source/network/evaluate" => Self::EvaluateNetwork,
             "source/audit/list" => Self::ListAuditEvents,
+            "source/context/searchSymbols" => Self::SearchSymbols,
+            "source/pty/open" => Self::PtyOpen,
+            "source/pty/write" => Self::PtyWrite,
+            "source/pty/read" => Self::PtyRead,
+            "source/pty/resize" => Self::PtyResize,
+            "source/pty/close" => Self::PtyClose,
+            "source/pty/list" => Self::PtyList,
+            "source/rag/index" => Self::RagIndex,
+            "source/rag/query" => Self::RagQuery,
+            "source/rag/status" => Self::RagStatus,
+            "source/templates/list" => Self::TemplateList,
+            "source/templates/scaffold" => Self::TemplateScaffold,
+            "source/cache/vendorStatus" => Self::CacheVendorStatus,
+            "source/mcp/list" => Self::McpList,
+            "source/mcp/reload" => Self::McpReload,
+            "source/mcp/call" => Self::McpCall,
+            "source/browser/navigate" => Self::BrowserNavigate,
+            "source/browser/inspect" => Self::BrowserInspect,
+            "source/browser/verifyApp" => Self::AppVerify,
             _ => return None,
         })
     }
@@ -354,6 +412,129 @@ pub struct ListAuditParams {
     pub session_id: Option<SessionId>,
     #[serde(default)]
     pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SearchSymbolsParams {
+    pub root: String,
+    pub query: String,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub path_glob: Option<String>,
+    #[serde(default)]
+    pub max_results: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PtyOpenParams {
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub shell: Option<String>,
+    #[serde(default)]
+    pub cols: Option<u16>,
+    #[serde(default)]
+    pub rows: Option<u16>,
+    #[serde(default)]
+    pub env: Option<std::collections::HashMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PtyIdParams {
+    pub pty_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PtyWriteParams {
+    pub pty_id: String,
+    pub data: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PtyReadParams {
+    pub pty_id: String,
+    #[serde(default)]
+    pub max_bytes: Option<usize>,
+    #[serde(default)]
+    pub wait_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PtyResizeParams {
+    pub pty_id: String,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RagIndexParams {
+    #[serde(default)]
+    pub docs_root: Option<String>,
+    #[serde(default)]
+    pub force: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RagQueryParams {
+    pub query: String,
+    #[serde(default)]
+    pub top_k: Option<usize>,
+    #[serde(default)]
+    pub bm25_weight: Option<f32>,
+    #[serde(default)]
+    pub vector_weight: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TemplateScaffoldParams {
+    pub template_id: String,
+    pub dest: String,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct McpCallParams {
+    pub server_id: String,
+    pub tool_name: String,
+    #[serde(default)]
+    pub arguments: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct BrowserNavigateParams {
+    pub url: String,
+    #[serde(default)]
+    pub wait_ms: Option<u64>,
+    #[serde(default)]
+    pub session_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct BrowserInspectParams {
+    #[serde(default)]
+    pub session_key: Option<String>,
+    #[serde(default)]
+    pub selector: Option<String>,
+    #[serde(default)]
+    pub script: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AppVerifyParams {
+    pub launch_command: String,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    pub url: String,
+    #[serde(default)]
+    pub ready_selector: Option<String>,
+    #[serde(default)]
+    pub assert_text: Option<String>,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
 }
 
 /// Helper aggregate documenting request/response shapes for codegen/docs.

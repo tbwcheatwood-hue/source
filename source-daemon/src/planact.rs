@@ -12,28 +12,55 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::analyzer::TreeSitterAnalyzer;
+use crate::browser::HeadlessBrowser;
 use crate::db::Db;
+use crate::mcp_host::{tool_allowed_for_tier, McpHost};
+use crate::offline_tools::{execute_offline_tool, phase3_builtin_tools, OfflineToolContext};
 use crate::policy::PolicyEngine;
+use crate::pty_runner::PtyRunner;
+use crate::rag::OfflineRag;
 use crate::shadow::ShadowGit;
+use crate::templates::TemplateManager;
 
 #[derive(Clone)]
 pub struct PlanActMachine {
     db: Db,
     policy: PolicyEngine,
     shadow: Arc<ShadowGit>,
+    pty: Arc<PtyRunner>,
+    rag: Arc<OfflineRag>,
+    templates: Arc<TemplateManager>,
+    browser: Arc<HeadlessBrowser>,
+    analyzer: Arc<TreeSitterAnalyzer>,
+    mcp: Arc<McpHost>,
     /// Categories that auto-approve in Act mode (session-scoped overrides can be added later).
     auto_approve: Arc<RwLock<HashSet<ApprovalCategory>>>,
 }
 
 impl PlanActMachine {
-    pub fn new(db: Db, policy: PolicyEngine, shadow: Arc<ShadowGit>) -> Self {
-        // Conservative defaults: nothing auto-approves until user opts in via resolve.
-        // File edits / shell / network / mcp / cross-node all require gates in Act.
+    pub fn new(
+        db: Db,
+        policy: PolicyEngine,
+        shadow: Arc<ShadowGit>,
+        pty: Arc<PtyRunner>,
+        rag: Arc<OfflineRag>,
+        templates: Arc<TemplateManager>,
+        browser: Arc<HeadlessBrowser>,
+        analyzer: Arc<TreeSitterAnalyzer>,
+        mcp: Arc<McpHost>,
+    ) -> Self {
         let auto = HashSet::new();
         Self {
             db,
             policy,
             shadow,
+            pty,
+            rag,
+            templates,
+            browser,
+            analyzer,
+            mcp,
             auto_approve: Arc::new(RwLock::new(auto)),
         }
     }
@@ -86,6 +113,9 @@ impl PlanActMachine {
                 | "status"
                 | "evaluate_network"
                 | "echo"
+                | "local_rag_docs"
+                | "sqlite_db_inspector"
+                | "symbol_search"
         )
     }
 
@@ -105,8 +135,6 @@ impl PlanActMachine {
 
         match session.mode {
             Mode::Plan => {
-                // Plan is read-only: only allow if every category is absent (pure read) —
-                // callers should use is_read_only_tool for tools. Any gated category is denied.
                 if categories.is_empty() {
                     return Ok(());
                 }
@@ -120,7 +148,6 @@ impl PlanActMachine {
                     if self.auto_approve.read().contains(cat) {
                         continue;
                     }
-                    // Create pending approval and require resolve before proceeding.
                     let id = Uuid::new_v4();
                     self.db
                         .insert_approval(id, Some(&session_id), *cat, summary, &detail)
@@ -196,12 +223,18 @@ impl PlanActMachine {
         }
     }
 
-    /// Invoke a tool through Plan/Act + network gates. Implements Phase-2 built-ins fully.
+    /// Invoke a tool through Plan/Act + network gates. Implements Phase-2 + Phase-3 built-ins.
     pub async fn invoke_tool(
         &self,
         session_id: SessionId,
         call: ToolCall,
     ) -> Result<ToolResult, CoreError> {
+        // Namespaced MCP tools: mcp__{server}__{tool}
+        if call.name.starts_with("mcp__") {
+            let rest = call.name[5..].to_string();
+            return self.invoke_mcp_tool(session_id, &rest, call).await;
+        }
+
         let tool = self
             .db
             .get_tool(&call.name)
@@ -216,8 +249,51 @@ impl PlanActMachine {
             )));
         }
 
-        let read_only = Self::is_read_only_tool(&tool.name);
-        if !read_only {
+        let tier = self.policy.tier();
+        if !tool_allowed_for_tier(tool.offline_capable, tool.requires_wan, tier) {
+            return Err(CoreError::NetworkBlocked(format!(
+                "tool {} unavailable at tier {}",
+                tool.name,
+                tier.as_str()
+            )));
+        }
+
+        let op = call.arguments.get("op").and_then(|v| v.as_str());
+        let mut read_only = Self::is_read_only_tool(&tool.name)
+            || (tool.name == "fs_ops" && matches!(op, Some("read" | "list" | "stat")))
+            || (tool.name == "git_ops"
+                && matches!(op, Some("status" | "diff" | "log" | "rev_parse")))
+            || (tool.name == "git_ops"
+                && op == Some("branch")
+                && call.arguments.get("ref_name").and_then(|v| v.as_str()).is_none())
+            || (tool.name == "archive_and_system"
+                && matches!(op, Some("uname" | "df" | "which" | "env" | "disk_usage")))
+            || (tool.name == "local_rag_docs" && matches!(op, Some("query" | "status")))
+            || (tool.name == "headless_browser" && op == Some("inspect"));
+        if tool.name == "git_ops"
+            && op == Some("branch")
+            && call.arguments.get("ref_name").and_then(|v| v.as_str()).is_some()
+        {
+            read_only = false;
+        }
+
+        // fs_ops write ops need FileEdits even if categories always include FileEdits —
+        // for read ops, skip gate when categories would otherwise block Plan mode.
+        let categories_for_gate: Vec<ApprovalCategory> = if read_only {
+            vec![]
+        } else {
+            tool.categories.clone()
+        };
+
+        if !categories_for_gate.is_empty() {
+            self.gate_categories(
+                session_id,
+                &categories_for_gate,
+                &format!("tool {}", tool.name),
+                call.arguments.clone(),
+            )
+            .await?;
+        } else if !read_only {
             self.gate_categories(
                 session_id,
                 &tool.categories,
@@ -227,7 +303,6 @@ impl PlanActMachine {
             .await?;
         }
 
-        // Network category tools must pass policy interceptor.
         if tool.categories.contains(&ApprovalCategory::Network) {
             if let Some(host) = call.arguments.get("host").and_then(|v| v.as_str()) {
                 self.policy
@@ -268,12 +343,77 @@ impl PlanActMachine {
         Ok(result)
     }
 
+    async fn invoke_mcp_tool(
+        &self,
+        session_id: SessionId,
+        rest: &str,
+        call: ToolCall,
+    ) -> Result<ToolResult, CoreError> {
+        let (server_id, tool_name) = rest
+            .split_once("__")
+            .ok_or_else(|| CoreError::InvalidArgument(format!("bad mcp tool name {}", call.name)))?;
+
+        self.gate_categories(
+            session_id,
+            &[ApprovalCategory::Mcp],
+            &format!("mcp {server_id}/{tool_name}"),
+            call.arguments.clone(),
+        )
+        .await?;
+
+        match self
+            .mcp
+            .call_tool(server_id, tool_name, call.arguments.clone())
+            .await
+        {
+            Ok(value) => Ok(ToolResult {
+                call_id: call.id,
+                name: call.name,
+                ok: true,
+                output: value.to_string(),
+                error: None,
+            }),
+            Err(e) => Ok(ToolResult {
+                call_id: call.id,
+                name: call.name,
+                ok: false,
+                output: String::new(),
+                error: Some(e.to_string()),
+            }),
+        }
+    }
+
     async fn execute_builtin(
         &self,
         tool: &ToolDefinition,
         call: &ToolCall,
         session_id: SessionId,
     ) -> ToolResult {
+        // Phase 3 offline suite
+        if matches!(
+            tool.name.as_str(),
+            "fs_ops"
+                | "terminal_exec"
+                | "local_rag_docs"
+                | "headless_browser"
+                | "app_verifier"
+                | "sqlite_db_inspector"
+                | "git_ops"
+                | "archive_and_system"
+                | "symbol_search"
+        ) {
+            let ctx = OfflineToolContext {
+                policy: &self.policy,
+                pty: &self.pty,
+                rag: &self.rag,
+                templates: &self.templates,
+                browser: &self.browser,
+                analyzer: &self.analyzer,
+                session_id,
+            };
+            return execute_offline_tool(&ctx, tool, call).await;
+        }
+
         match tool.name.as_str() {
             "echo" => ToolResult {
                 call_id: call.id.clone(),
@@ -396,7 +536,14 @@ impl PlanActMachine {
                                 Some(session_id),
                                 command,
                                 code,
-                                &combined.chars().rev().take(2000).collect::<String>().chars().rev().collect::<String>(),
+                                &combined
+                                    .chars()
+                                    .rev()
+                                    .take(2000)
+                                    .collect::<String>()
+                                    .chars()
+                                    .rev()
+                                    .collect::<String>(),
                             )
                             .await;
                         ToolResult {
@@ -442,7 +589,6 @@ impl PlanActMachine {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                // Policy already checked above when Network category present.
                 match reqwest::Client::new().get(&url).send().await {
                     Ok(resp) => {
                         let status = resp.status();
@@ -479,8 +625,12 @@ impl PlanActMachine {
     }
 
     pub async fn register_builtin_tools(&self) -> Result<()> {
-        let tools = builtin_tools();
+        let mut tools = builtin_tools();
+        tools.extend(phase3_builtin_tools());
         for t in tools {
+            self.db.register_tool(&t).await?;
+        }
+        for t in self.mcp.as_tool_definitions() {
             self.db.register_tool(&t).await?;
         }
         Ok(())
@@ -500,6 +650,8 @@ fn builtin_tools() -> Vec<ToolDefinition> {
             }),
             categories: vec![],
             enabled: true,
+            offline_capable: true,
+            requires_wan: false,
         },
         ToolDefinition {
             name: "read_file".into(),
@@ -511,6 +663,8 @@ fn builtin_tools() -> Vec<ToolDefinition> {
             }),
             categories: vec![],
             enabled: true,
+            offline_capable: true,
+            requires_wan: false,
         },
         ToolDefinition {
             name: "list_dir".into(),
@@ -522,6 +676,8 @@ fn builtin_tools() -> Vec<ToolDefinition> {
             }),
             categories: vec![],
             enabled: true,
+            offline_capable: true,
+            requires_wan: false,
         },
         ToolDefinition {
             name: "write_file".into(),
@@ -536,6 +692,8 @@ fn builtin_tools() -> Vec<ToolDefinition> {
             }),
             categories: vec![FileEdits],
             enabled: true,
+            offline_capable: true,
+            requires_wan: false,
         },
         ToolDefinition {
             name: "shell".into(),
@@ -547,6 +705,8 @@ fn builtin_tools() -> Vec<ToolDefinition> {
             }),
             categories: vec![Shell],
             enabled: true,
+            offline_capable: true,
+            requires_wan: false,
         },
         ToolDefinition {
             name: "evaluate_network".into(),
@@ -558,6 +718,8 @@ fn builtin_tools() -> Vec<ToolDefinition> {
             }),
             categories: vec![],
             enabled: true,
+            offline_capable: true,
+            requires_wan: false,
         },
         ToolDefinition {
             name: "fetch_url".into(),
@@ -569,6 +731,8 @@ fn builtin_tools() -> Vec<ToolDefinition> {
             }),
             categories: vec![Network],
             enabled: true,
+            offline_capable: false,
+            requires_wan: true,
         },
     ]
 }

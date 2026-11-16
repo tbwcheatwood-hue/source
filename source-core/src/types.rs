@@ -15,6 +15,11 @@ pub struct WorkspacePaths {
     pub checkpoints_dir: PathBuf,
     pub logs_dir: PathBuf,
     pub cache_dir: PathBuf,
+    pub offline_docs_dir: PathBuf,
+    pub templates_dir: PathBuf,
+    pub extensions_dir: PathBuf,
+    pub rag_dir: PathBuf,
+    pub vendor_dir: PathBuf,
     pub static_dir: Option<PathBuf>,
 }
 
@@ -26,6 +31,11 @@ impl WorkspacePaths {
             checkpoints_dir: root.join("checkpoints"),
             logs_dir: root.join("logs"),
             cache_dir: root.join("cache"),
+            offline_docs_dir: root.join("offline-docs"),
+            templates_dir: root.join("templates"),
+            extensions_dir: root.join("extensions"),
+            rag_dir: root.join("cache").join("rag"),
+            vendor_dir: root.join("cache").join("vendor"),
             static_dir: None,
             root,
         }
@@ -36,6 +46,15 @@ impl WorkspacePaths {
         std::fs::create_dir_all(&self.checkpoints_dir)?;
         std::fs::create_dir_all(&self.logs_dir)?;
         std::fs::create_dir_all(&self.cache_dir)?;
+        std::fs::create_dir_all(&self.offline_docs_dir)?;
+        std::fs::create_dir_all(&self.templates_dir)?;
+        std::fs::create_dir_all(&self.extensions_dir)?;
+        std::fs::create_dir_all(&self.rag_dir)?;
+        std::fs::create_dir_all(&self.vendor_dir)?;
+        std::fs::create_dir_all(self.vendor_dir.join("npm"))?;
+        std::fs::create_dir_all(self.vendor_dir.join("pnpm"))?;
+        std::fs::create_dir_all(self.vendor_dir.join("cargo"))?;
+        std::fs::create_dir_all(self.vendor_dir.join("wheels"))?;
         Ok(())
     }
 }
@@ -236,6 +255,16 @@ pub struct ToolDefinition {
     pub input_schema: serde_json::Value,
     pub categories: Vec<ApprovalCategory>,
     pub enabled: bool,
+    /// Tool can run with no WAN (LOCAL_ONLY / LOCAL_AND_LAN).
+    #[serde(default = "default_true")]
+    pub offline_capable: bool,
+    /// Tool needs public Internet; filtered out unless tier is UNRESTRICTED_CONFIGURABLE.
+    #[serde(default)]
+    pub requires_wan: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
