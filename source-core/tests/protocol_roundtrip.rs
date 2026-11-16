@@ -18,10 +18,16 @@ fn method_names_roundtrip() {
         Method::GetSelectedProvider,
         Method::SetSelectedProvider,
         Method::SetSessionProvider,
+        Method::McpListAll,
+        Method::McpUpsert,
+        Method::McpDelete,
+        Method::McpSetEnabled,
+        Method::StateGet,
+        Method::StateSet,
     ] {
         assert_eq!(Method::parse(m.as_str()), Some(m));
     }
-    assert_eq!(PROTOCOL_VERSION, "1.3.0");
+    assert_eq!(PROTOCOL_VERSION, "1.4.0");
 }
 
 #[test]

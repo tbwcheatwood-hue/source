@@ -13,7 +13,7 @@ use crate::types::{
     ProviderConfig, SessionId, SessionMeta, ToolCall, ToolDefinition, ToolResult,
 };
 
-pub const PROTOCOL_VERSION: &str = "1.3.0";
+pub const PROTOCOL_VERSION: &str = "1.4.0";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
@@ -194,8 +194,14 @@ pub enum Method {
     TemplateScaffold,
     CacheVendorStatus,
     McpList,
+    McpListAll,
     McpReload,
     McpCall,
+    McpUpsert,
+    McpDelete,
+    McpSetEnabled,
+    StateGet,
+    StateSet,
     BrowserNavigate,
     BrowserInspect,
     AppVerify,
@@ -269,8 +275,14 @@ impl Method {
             Self::TemplateScaffold => "source/templates/scaffold",
             Self::CacheVendorStatus => "source/cache/vendorStatus",
             Self::McpList => "source/mcp/list",
+            Self::McpListAll => "source/mcp/listAll",
             Self::McpReload => "source/mcp/reload",
             Self::McpCall => "source/mcp/call",
+            Self::McpUpsert => "source/mcp/upsert",
+            Self::McpDelete => "source/mcp/delete",
+            Self::McpSetEnabled => "source/mcp/setEnabled",
+            Self::StateGet => "source/state/get",
+            Self::StateSet => "source/state/set",
             Self::BrowserNavigate => "source/browser/navigate",
             Self::BrowserInspect => "source/browser/inspect",
             Self::AppVerify => "source/browser/verifyApp",
@@ -343,8 +355,14 @@ impl Method {
             "source/templates/scaffold" => Self::TemplateScaffold,
             "source/cache/vendorStatus" => Self::CacheVendorStatus,
             "source/mcp/list" => Self::McpList,
+            "source/mcp/listAll" => Self::McpListAll,
             "source/mcp/reload" => Self::McpReload,
             "source/mcp/call" => Self::McpCall,
+            "source/mcp/upsert" => Self::McpUpsert,
+            "source/mcp/delete" => Self::McpDelete,
+            "source/mcp/setEnabled" => Self::McpSetEnabled,
+            "source/state/get" => Self::StateGet,
+            "source/state/set" => Self::StateSet,
             "source/browser/navigate" => Self::BrowserNavigate,
             "source/browser/inspect" => Self::BrowserInspect,
             "source/browser/verifyApp" => Self::AppVerify,
@@ -634,6 +652,52 @@ pub struct McpCallParams {
     pub tool_name: String,
     #[serde(default)]
     pub arguments: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct McpUpsertParams {
+    pub id: String,
+    pub name: String,
+    /// `stdio` | `sse` | `streamable_http`
+    pub transport: String,
+    #[serde(default)]
+    pub command: Option<Vec<String>>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default = "default_true_bool")]
+    pub offline_capable: bool,
+    #[serde(default)]
+    pub requires_wan: bool,
+    #[serde(default = "default_true_bool")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+}
+
+fn default_true_bool() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct McpDeleteParams {
+    pub server_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct McpSetEnabledParams {
+    pub server_id: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct StateGetParams {
+    pub key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct StateSetParams {
+    pub key: String,
+    pub value: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

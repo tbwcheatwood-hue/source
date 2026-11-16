@@ -15,6 +15,8 @@ export function ChatPanel({
   selectedProviderId,
   ensureSession,
   setMode,
+  width = 360,
+  onToggleCollapse,
 }: {
   client: SourceClient;
   session: SessionMeta | null;
@@ -22,6 +24,8 @@ export function ChatPanel({
   selectedProviderId: string | null;
   ensureSession: () => Promise<SessionMeta>;
   setMode: (mode: Mode) => Promise<void>;
+  width?: number;
+  onToggleCollapse?: () => void;
 }) {
   const [turns, setTurns] = useState<ChatTurn[]>([
     {
@@ -95,30 +99,46 @@ export function ChatPanel({
   };
 
   return (
-    <aside className="flex h-full min-h-0 w-[360px] shrink-0 flex-col border-l border-white/10 bg-black/20">
-      <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
-        <div>
+    <aside
+      className="flex h-full min-h-0 shrink-0 flex-col border-l border-white/10 bg-black/20"
+      style={{ width }}
+    >
+      <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2">
+        <div className="min-w-0">
           <p className="font-display text-lg text-ink-100">Plan · Act</p>
           <p className="font-mono text-[10px] text-ink-500">
             {session ? session.id.slice(0, 8) : "no session"}
             {activeProvider ? ` · ${activeProvider}` : " · provider auto"}
           </p>
         </div>
-        <div className="inline-flex overflow-hidden rounded-md ring-1 ring-white/15">
-          {(["plan", "act"] as Mode[]).map((m) => (
+        <div className="flex shrink-0 items-center gap-1">
+          <div className="inline-flex overflow-hidden rounded-md ring-1 ring-white/15">
+            {(["plan", "act"] as Mode[]).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => void setMode(m)}
+                className={`px-3 py-1.5 text-xs uppercase tracking-wide ${
+                  mode === m
+                    ? "bg-ember-500/25 text-ember-400"
+                    : "bg-transparent text-ink-400 hover:text-ink-100"
+                }`}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+          {onToggleCollapse ? (
             <button
-              key={m}
               type="button"
-              onClick={() => void setMode(m)}
-              className={`px-3 py-1.5 text-xs uppercase tracking-wide ${
-                mode === m
-                  ? "bg-ember-500/25 text-ember-400"
-                  : "bg-transparent text-ink-400 hover:text-ink-100"
-              }`}
+              className="ide-btn px-1.5"
+              title="Collapse chat rail"
+              aria-label="Collapse chat rail"
+              onClick={onToggleCollapse}
             >
-              {m}
+              ›
             </button>
-          ))}
+          ) : null}
         </div>
       </div>
       <div className="min-h-0 flex-1 space-y-3 overflow-auto px-3 py-3">
