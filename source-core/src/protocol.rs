@@ -3,13 +3,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::mesh::{
+    ClusterSnapshot, DiscoveredPeer, DispatchResult, MeshPeerInfo, MeshStatus, PairingSession,
+    PeerRole, PeerSource, RemoteInferRequest, RemoteInferResponse, RemoteTaskInfo, RemoteTaskSpec,
+};
 use crate::policy::{ApprovalCategory, ApprovalDecision, NetworkTier};
 use crate::types::{
     CheckpointId, CheckpointMeta, DaemonStatus, LlmRequest, LlmResponse, Mode, ProviderConfig,
     SessionId, SessionMeta, ToolCall, ToolDefinition, ToolResult,
 };
 
-pub const PROTOCOL_VERSION: &str = "1.1.0";
+pub const PROTOCOL_VERSION: &str = "1.2.0";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
@@ -190,6 +194,26 @@ pub enum Method {
     BrowserNavigate,
     BrowserInspect,
     AppVerify,
+    // Phase 4 — mesh / cluster
+    MeshStart,
+    MeshStop,
+    MeshStatus,
+    MeshDiscover,
+    MeshRegisterPeer,
+    MeshUnregisterPeer,
+    MeshListPeers,
+    MeshBeginPairing,
+    MeshConfirmPairing,
+    MeshCompletePairing,
+    MeshRejectPairing,
+    MeshTrustPeer,
+    MeshRevokePeer,
+    ClusterResources,
+    ClusterDispatch,
+    ClusterTaskStatus,
+    ClusterCancelTask,
+    ClusterListTasks,
+    LlmCompleteRemote,
 }
 
 impl Method {
@@ -240,6 +264,25 @@ impl Method {
             Self::BrowserNavigate => "source/browser/navigate",
             Self::BrowserInspect => "source/browser/inspect",
             Self::AppVerify => "source/browser/verifyApp",
+            Self::MeshStart => "source/mesh/start",
+            Self::MeshStop => "source/mesh/stop",
+            Self::MeshStatus => "source/mesh/status",
+            Self::MeshDiscover => "source/mesh/discover",
+            Self::MeshRegisterPeer => "source/mesh/registerPeer",
+            Self::MeshUnregisterPeer => "source/mesh/unregisterPeer",
+            Self::MeshListPeers => "source/mesh/listPeers",
+            Self::MeshBeginPairing => "source/mesh/beginPairing",
+            Self::MeshConfirmPairing => "source/mesh/confirmPairing",
+            Self::MeshCompletePairing => "source/mesh/completePairing",
+            Self::MeshRejectPairing => "source/mesh/rejectPairing",
+            Self::MeshTrustPeer => "source/mesh/trustPeer",
+            Self::MeshRevokePeer => "source/mesh/revokePeer",
+            Self::ClusterResources => "source/cluster/resources",
+            Self::ClusterDispatch => "source/cluster/dispatch",
+            Self::ClusterTaskStatus => "source/cluster/taskStatus",
+            Self::ClusterCancelTask => "source/cluster/cancelTask",
+            Self::ClusterListTasks => "source/cluster/listTasks",
+            Self::LlmCompleteRemote => "source/llm/completeRemote",
         }
     }
 
@@ -290,6 +333,25 @@ impl Method {
             "source/browser/navigate" => Self::BrowserNavigate,
             "source/browser/inspect" => Self::BrowserInspect,
             "source/browser/verifyApp" => Self::AppVerify,
+            "source/mesh/start" => Self::MeshStart,
+            "source/mesh/stop" => Self::MeshStop,
+            "source/mesh/status" => Self::MeshStatus,
+            "source/mesh/discover" => Self::MeshDiscover,
+            "source/mesh/registerPeer" => Self::MeshRegisterPeer,
+            "source/mesh/unregisterPeer" => Self::MeshUnregisterPeer,
+            "source/mesh/listPeers" => Self::MeshListPeers,
+            "source/mesh/beginPairing" => Self::MeshBeginPairing,
+            "source/mesh/confirmPairing" => Self::MeshConfirmPairing,
+            "source/mesh/completePairing" => Self::MeshCompletePairing,
+            "source/mesh/rejectPairing" => Self::MeshRejectPairing,
+            "source/mesh/trustPeer" => Self::MeshTrustPeer,
+            "source/mesh/revokePeer" => Self::MeshRevokePeer,
+            "source/cluster/resources" => Self::ClusterResources,
+            "source/cluster/dispatch" => Self::ClusterDispatch,
+            "source/cluster/taskStatus" => Self::ClusterTaskStatus,
+            "source/cluster/cancelTask" => Self::ClusterCancelTask,
+            "source/cluster/listTasks" => Self::ClusterListTasks,
+            "source/llm/completeRemote" => Self::LlmCompleteRemote,
             _ => return None,
         })
     }
@@ -537,6 +599,106 @@ pub struct AppVerifyParams {
     pub timeout_ms: Option<u64>,
 }
 
+// --- Phase 4 mesh / cluster params ---
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MeshStartParams {
+    #[serde(default)]
+    pub advertise: Option<bool>,
+    #[serde(default)]
+    pub browse: Option<bool>,
+    #[serde(default)]
+    pub role: Option<PeerRole>,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RegisterPeerParams {
+    /// Hostname, IPv4/IPv6, or Tailscale MagicDNS name.
+    pub host: String,
+    #[serde(default)]
+    pub port: Option<u16>,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub source: Option<PeerSource>,
+    #[serde(default)]
+    pub peer_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PeerIdParams {
+    pub peer_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct BeginPairingParams {
+    #[serde(default)]
+    pub label: Option<String>,
+    /// PIN lifetime in seconds (default 300).
+    #[serde(default)]
+    pub ttl_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConfirmPairingParams {
+    pub pairing_id: Uuid,
+    pub peer_id: String,
+    pub peer_public_key: String,
+    pub pin: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub address: Option<String>,
+    #[serde(default)]
+    pub port: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CompletePairingParams {
+    /// Remote peer host (IP / MagicDNS).
+    pub host: String,
+    #[serde(default)]
+    pub port: Option<u16>,
+    pub pin: String,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RejectPairingParams {
+    pub pairing_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TrustPeerParams {
+    pub peer_id: String,
+    pub trusted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ClusterDispatchParams {
+    pub tasks: Vec<RemoteTaskSpec>,
+    #[serde(default)]
+    pub parallel: Option<bool>,
+    #[serde(default)]
+    pub session_id: Option<SessionId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TaskIdParams {
+    pub task_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ListTasksParams {
+    #[serde(default)]
+    pub include_completed: Option<bool>,
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
 /// Helper aggregate documenting request/response shapes for codegen/docs.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProtocolCatalog {
@@ -549,4 +711,13 @@ pub struct ProtocolCatalog {
     pub llm_response: LlmResponse,
     pub tool: ToolDefinition,
     pub tool_result: ToolResult,
+    pub mesh_status: MeshStatus,
+    pub mesh_peer: MeshPeerInfo,
+    pub discovered_peer: DiscoveredPeer,
+    pub pairing: PairingSession,
+    pub cluster: ClusterSnapshot,
+    pub dispatch: DispatchResult,
+    pub remote_task: RemoteTaskInfo,
+    pub remote_infer_request: RemoteInferRequest,
+    pub remote_infer_response: RemoteInferResponse,
 }

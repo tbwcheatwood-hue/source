@@ -126,6 +126,22 @@ pub struct PeerKeyRecord {
     pub label: Option<String>,
     pub trusted: bool,
     pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub address: Option<String>,
+    #[serde(default)]
+    pub port: Option<u16>,
+    #[serde(default)]
+    pub fingerprint: Option<String>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub capabilities_json: Option<String>,
+    #[serde(default)]
+    pub last_seen_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub paired_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -327,6 +343,11 @@ impl NetworkPolicy {
             }
         }
     }
+
+    /// Mesh / LAN peer traffic is allowed only at LOCAL_AND_LAN or higher.
+    pub fn mesh_allowed(&self) -> bool {
+        crate::mesh::mesh_tier_allowed(self.tier)
+    }
 }
 
 #[cfg(test)]
@@ -385,5 +406,12 @@ mod tests {
             p.evaluate("api.openai.com", None),
             NetworkDecision::Allow { .. }
         ));
+    }
+
+    #[test]
+    fn mesh_allowed_only_lan_or_higher() {
+        assert!(!NetworkPolicy::with_tier(NetworkTier::LocalOnly).mesh_allowed());
+        assert!(NetworkPolicy::with_tier(NetworkTier::LocalAndLan).mesh_allowed());
+        assert!(NetworkPolicy::with_tier(NetworkTier::UnrestrictedConfigurable).mesh_allowed());
     }
 }

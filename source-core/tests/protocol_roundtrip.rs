@@ -10,10 +10,13 @@ fn method_names_roundtrip() {
         Method::Complete,
         Method::CreateCheckpoint,
         Method::InvokeTool,
+        Method::MeshStart,
+        Method::ClusterResources,
+        Method::LlmCompleteRemote,
     ] {
         assert_eq!(Method::parse(m.as_str()), Some(m));
     }
-    assert!(PROTOCOL_VERSION.starts_with('1'));
+    assert_eq!(PROTOCOL_VERSION, "1.2.0");
 }
 
 #[test]

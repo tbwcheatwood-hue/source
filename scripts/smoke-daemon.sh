@@ -35,4 +35,14 @@ curl -sf -X POST http://127.0.0.1:17420/rpc \
   -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","id":2,"method":"source/status","params":{}}' | tee "$TMP/status.json"
 echo
+curl -sf -X POST http://127.0.0.1:17420/rpc \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":3,"method":"source/mesh/status","params":{}}' | tee "$TMP/mesh.json"
+echo
+curl -sf -X POST http://127.0.0.1:17420/rpc \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":4,"method":"source/network/setTier","params":{"tier":"LOCAL_AND_LAN"}}' | tee "$TMP/set_tier.json"
+echo
+curl -sf http://127.0.0.1:17420/api/cluster/resources | tee "$TMP/cluster.json"
+echo
 echo "smoke ok"

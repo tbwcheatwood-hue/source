@@ -1,7 +1,12 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use source_core::policy::{ApprovalCategory, ApprovalDecision, NetworkPolicy, NetworkTier};
+use source_core::mesh::{
+    PeerCapabilities, RemoteTaskInfo, RemoteTaskKind, RemoteTaskState,
+};
+use source_core::policy::{
+    ApprovalCategory, ApprovalDecision, NetworkPolicy, NetworkTier, PeerKeyRecord,
+};
 use source_core::types::{
     AuditEvent, AuditEventKind, CheckpointId, CheckpointMeta, LlmProviderId, LlmProviderKind, Mode,
     ProviderConfig, SessionId, SessionMeta, ToolDefinition,
@@ -49,6 +54,7 @@ impl Db {
         for sql in [
             include_str!("../migrations/001_init.sql"),
             include_str!("../migrations/002_phase3.sql"),
+            include_str!("../migrations/003_phase4.sql"),
         ] {
             for stmt in split_sql(sql) {
                 // ALTER TABLE ADD COLUMN may fail if already applied — ignore duplicate column.
@@ -511,6 +517,278 @@ impl Db {
         )
         .await
     }
+
+    // --- Phase 4: node identity + peer keys + mesh tasks ---
+
+    pub async fn load_node_identity(&self) -> Result<Option<NodeIdentityRow>> {
+        let row = sqlx::query(
+            "SELECT node_id, public_key_hex, private_key_hex, label, role FROM node_identity WHERE id = 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| NodeIdentityRow {
+            node_id: r.try_get("node_id").expect("node_id"),
+            public_key_hex: r.try_get("public_key_hex").expect("public_key_hex"),
+            private_key_hex: r.try_get("private_key_hex").expect("private_key_hex"),
+            label: r.try_get("label").expect("label"),
+            role: r.try_get("role").expect("role"),
+        }))
+    }
+
+    pub async fn save_node_identity(
+        &self,
+        node_id: &str,
+        public_key_hex: &str,
+        private_key_hex: &str,
+        label: &str,
+        role: &str,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO node_identity (id, node_id, public_key_hex, private_key_hex, label, role, created_at, updated_at)
+             VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               node_id=excluded.node_id,
+               public_key_hex=excluded.public_key_hex,
+               private_key_hex=excluded.private_key_hex,
+               label=excluded.label,
+               role=excluded.role,
+               updated_at=excluded.updated_at",
+        )
+        .bind(node_id)
+        .bind(public_key_hex)
+        .bind(private_key_hex)
+        .bind(label)
+        .bind(role)
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn update_node_identity_meta(
+        &self,
+        node_id: &str,
+        label: &str,
+        role: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE node_identity SET node_id = ?, label = ?, role = ?, updated_at = ? WHERE id = 1",
+        )
+        .bind(node_id)
+        .bind(label)
+        .bind(role)
+        .bind(Utc::now().to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_peer_keys(&self) -> Result<Vec<PeerKeyRecord>> {
+        let rows = sqlx::query(
+            "SELECT peer_id, public_key, label, trusted, created_at, address, port, fingerprint, source, role,
+                    capabilities_json, last_seen_at, paired_at
+             FROM peer_keys ORDER BY created_at",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_peer_key).collect()
+    }
+
+    pub async fn get_peer_key(&self, peer_id: &str) -> Result<Option<PeerKeyRecord>> {
+        let row = sqlx::query(
+            "SELECT peer_id, public_key, label, trusted, created_at, address, port, fingerprint, source, role,
+                    capabilities_json, last_seen_at, paired_at
+             FROM peer_keys WHERE peer_id = ?",
+        )
+        .bind(peer_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(row_to_peer_key).transpose()
+    }
+
+    pub async fn upsert_peer_key(
+        &self,
+        record: &PeerKeyRecord,
+        session_secret: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO peer_keys (
+                peer_id, public_key, label, trusted, created_at, address, port, fingerprint, source, role,
+                capabilities_json, last_seen_at, paired_at, session_secret
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(peer_id) DO UPDATE SET
+               public_key=excluded.public_key,
+               label=excluded.label,
+               trusted=excluded.trusted,
+               address=COALESCE(excluded.address, peer_keys.address),
+               port=COALESCE(excluded.port, peer_keys.port),
+               fingerprint=excluded.fingerprint,
+               source=excluded.source,
+               role=excluded.role,
+               capabilities_json=excluded.capabilities_json,
+               last_seen_at=excluded.last_seen_at,
+               paired_at=COALESCE(excluded.paired_at, peer_keys.paired_at),
+               session_secret=COALESCE(excluded.session_secret, peer_keys.session_secret)",
+        )
+        .bind(&record.peer_id)
+        .bind(&record.public_key)
+        .bind(&record.label)
+        .bind(if record.trusted { 1 } else { 0 })
+        .bind(record.created_at.to_rfc3339())
+        .bind(&record.address)
+        .bind(record.port.map(|p| p as i64))
+        .bind(&record.fingerprint)
+        .bind(record.source.as_deref().unwrap_or("manual"))
+        .bind(record.role.as_deref().unwrap_or("hybrid"))
+        .bind(
+            record
+                .capabilities_json
+                .as_deref()
+                .unwrap_or("{}"),
+        )
+        .bind(record.last_seen_at.map(|t| t.to_rfc3339()))
+        .bind(record.paired_at.map(|t| t.to_rfc3339()))
+        .bind(session_secret)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete_peer_key(&self, peer_id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM peer_keys WHERE peer_id = ?")
+            .bind(peer_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn set_peer_trusted(&self, peer_id: &str, trusted: bool) -> Result<()> {
+        sqlx::query("UPDATE peer_keys SET trusted = ? WHERE peer_id = ?")
+            .bind(if trusted { 1 } else { 0 })
+            .bind(peer_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn touch_peer_seen(&self, peer_id: &str) -> Result<()> {
+        sqlx::query("UPDATE peer_keys SET last_seen_at = ? WHERE peer_id = ?")
+            .bind(Utc::now().to_rfc3339())
+            .bind(peer_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn update_peer_capabilities(
+        &self,
+        peer_id: &str,
+        caps: &PeerCapabilities,
+    ) -> Result<()> {
+        sqlx::query("UPDATE peer_keys SET capabilities_json = ?, last_seen_at = ? WHERE peer_id = ?")
+            .bind(serde_json::to_string(caps)?)
+            .bind(Utc::now().to_rfc3339())
+            .bind(peer_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn insert_mesh_task(&self, info: &RemoteTaskInfo, payload: &Value) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO mesh_tasks (
+                id, parent_id, kind, label, state, assigned_peer_id, required_model, min_vram_mb,
+                payload_json, result_json, error, created_at, updated_at, completed_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(info.task_id.to_string())
+        .bind(info.parent_id.map(|u| u.to_string()))
+        .bind(info.kind.as_str())
+        .bind(&info.label)
+        .bind(info.state.as_str())
+        .bind(&info.assigned_peer_id)
+        .bind(&info.required_model)
+        .bind(info.min_vram_mb.map(|v| v as i64))
+        .bind(payload.to_string())
+        .bind(info.result.as_ref().map(|v| v.to_string()))
+        .bind(&info.error)
+        .bind(info.created_at.to_rfc3339())
+        .bind(info.updated_at.to_rfc3339())
+        .bind(info.completed_at.map(|t| t.to_rfc3339()))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn update_mesh_task(&self, info: &RemoteTaskInfo) -> Result<()> {
+        sqlx::query(
+            "UPDATE mesh_tasks SET state = ?, assigned_peer_id = ?, result_json = ?, error = ?,
+             updated_at = ?, completed_at = ? WHERE id = ?",
+        )
+        .bind(info.state.as_str())
+        .bind(&info.assigned_peer_id)
+        .bind(info.result.as_ref().map(|v| v.to_string()))
+        .bind(&info.error)
+        .bind(info.updated_at.to_rfc3339())
+        .bind(info.completed_at.map(|t| t.to_rfc3339()))
+        .bind(info.task_id.to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_mesh_task(&self, task_id: Uuid) -> Result<Option<RemoteTaskInfo>> {
+        let row = sqlx::query(
+            "SELECT id, parent_id, kind, label, state, assigned_peer_id, required_model, min_vram_mb,
+                    result_json, error, created_at, updated_at, completed_at
+             FROM mesh_tasks WHERE id = ?",
+        )
+        .bind(task_id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(row_to_mesh_task).transpose()
+    }
+
+    pub async fn list_mesh_tasks(
+        &self,
+        include_completed: bool,
+        limit: u32,
+    ) -> Result<Vec<RemoteTaskInfo>> {
+        let limit = limit.clamp(1, 1000) as i64;
+        let rows = if include_completed {
+            sqlx::query(
+                "SELECT id, parent_id, kind, label, state, assigned_peer_id, required_model, min_vram_mb,
+                        result_json, error, created_at, updated_at, completed_at
+                 FROM mesh_tasks ORDER BY created_at DESC LIMIT ?",
+            )
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                "SELECT id, parent_id, kind, label, state, assigned_peer_id, required_model, min_vram_mb,
+                        result_json, error, created_at, updated_at, completed_at
+                 FROM mesh_tasks
+                 WHERE state IN ('pending','assigned','running')
+                 ORDER BY created_at DESC LIMIT ?",
+            )
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?
+        };
+        rows.into_iter().map(row_to_mesh_task).collect()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct NodeIdentityRow {
+    pub node_id: String,
+    pub public_key_hex: String,
+    pub private_key_hex: String,
+    pub label: String,
+    pub role: String,
 }
 
 fn split_sql(sql: &str) -> Vec<String> {
@@ -616,6 +894,50 @@ fn row_to_checkpoint(row: sqlx::sqlite::SqliteRow) -> Result<CheckpointMeta> {
         label: row.try_get("label")?,
         created_at: parse_rfc3339(&row.try_get::<String, _>("created_at")?)?,
         audit_event_id: audit.and_then(|s| Uuid::parse_str(&s).ok()),
+    })
+}
+
+fn row_to_peer_key(row: sqlx::sqlite::SqliteRow) -> Result<PeerKeyRecord> {
+    let trusted: i64 = row.try_get("trusted")?;
+    let port: Option<i64> = row.try_get("port").ok().flatten();
+    let last_seen: Option<String> = row.try_get("last_seen_at").ok().flatten();
+    let paired: Option<String> = row.try_get("paired_at").ok().flatten();
+    Ok(PeerKeyRecord {
+        peer_id: row.try_get("peer_id")?,
+        public_key: row.try_get("public_key")?,
+        label: row.try_get("label")?,
+        trusted: trusted != 0,
+        created_at: parse_rfc3339(&row.try_get::<String, _>("created_at")?)?,
+        address: row.try_get("address").ok().flatten(),
+        port: port.map(|p| p as u16),
+        fingerprint: row.try_get("fingerprint").ok().flatten(),
+        source: row.try_get("source").ok().flatten(),
+        role: row.try_get("role").ok().flatten(),
+        capabilities_json: row.try_get("capabilities_json").ok().flatten(),
+        last_seen_at: last_seen.and_then(|s| parse_rfc3339(&s).ok()),
+        paired_at: paired.and_then(|s| parse_rfc3339(&s).ok()),
+    })
+}
+
+fn row_to_mesh_task(row: sqlx::sqlite::SqliteRow) -> Result<RemoteTaskInfo> {
+    let parent: Option<String> = row.try_get("parent_id")?;
+    let result_json: Option<String> = row.try_get("result_json")?;
+    let completed: Option<String> = row.try_get("completed_at")?;
+    let min_vram: Option<i64> = row.try_get("min_vram_mb")?;
+    Ok(RemoteTaskInfo {
+        task_id: Uuid::parse_str(&row.try_get::<String, _>("id")?)?,
+        parent_id: parent.and_then(|s| Uuid::parse_str(&s).ok()),
+        kind: RemoteTaskKind::from_str(&row.try_get::<String, _>("kind")?)?,
+        label: row.try_get("label")?,
+        state: RemoteTaskState::from_str(&row.try_get::<String, _>("state")?)?,
+        assigned_peer_id: row.try_get("assigned_peer_id")?,
+        required_model: row.try_get("required_model")?,
+        min_vram_mb: min_vram.map(|v| v as u64),
+        result: result_json.and_then(|s| serde_json::from_str(&s).ok()),
+        error: row.try_get("error")?,
+        created_at: parse_rfc3339(&row.try_get::<String, _>("created_at")?)?,
+        updated_at: parse_rfc3339(&row.try_get::<String, _>("updated_at")?)?,
+        completed_at: completed.and_then(|s| parse_rfc3339(&s).ok()),
     })
 }
 
