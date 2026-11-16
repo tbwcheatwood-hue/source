@@ -1,13 +1,13 @@
-# Source (Phase 1–2)
+# Source (Phase 1–3)
 
-Local-first agent IDE monorepo. **Phases 1–2 only**: architecture, shared protocol, daemon with network policy / LLM router / context compactor / shadow git / Plan·Act, plus web + Tauri shells wired to the daemon.
+Local-first agent IDE monorepo. **Phases 1–3**: architecture, shared protocol, daemon with network policy / LLM router / context compactor / shadow git / Plan·Act, plus offline tool suite / app factory / MCP host, and web + Tauri shells wired to the daemon.
 
 ## Layout
 
 | Path | Role |
 |------|------|
-| `source-core` | Shared Rust types, JSON-RPC protocol, network policy types, context models |
-| `source-daemon` | Tokio + Axum + SQLite daemon (`~/.source/`), HTTP JSON-RPC + WebSocket |
+| `source-core` | Shared Rust types, JSON-RPC protocol 1.1.0, network policy, context models |
+| `source-daemon` | Tokio + Axum + SQLite daemon (`~/.source/`), offline tools, RAG, MCP host, PTY, browser |
 | `source-web` | React + TypeScript + Vite + Tailwind app shell (tier + WS client) |
 | `source-desktop` | Tauri v2 shell with real IPC → daemon JSON-RPC |
 
@@ -16,9 +16,10 @@ Local-first agent IDE monorepo. **Phases 1–2 only**: architecture, shared prot
 - Rust **1.100+** (see `rust-toolchain.toml`)
 - Node **20+** and **pnpm** 9+
 - `git` (shadow checkpoints)
+- Chromium/Chrome for `headless_browser` / `app_verifier`
 - Linux desktop build also needs WebKitGTK 4.1 / GTK 3 (Tauri)
 
-## Build & test (Phase 1–2)
+## Build & test (Phase 1–3)
 
 ```bash
 # Rust
@@ -50,7 +51,11 @@ Data directory defaults to `~/.source/` (`SOURCE_HOME` overrides the home used f
 - `POST /rpc` — JSON-RPC 2.0
 - `WS /ws` — same JSON-RPC methods + `source/hello` notification
 
-Key methods: `source/status`, `source/network/{getTier,setTier,evaluate}`, `source/session/*`, `source/mode/set`, `source/llm/*`, `source/context/*`, `source/checkpoint/*`, `source/approval/*`, `source/tools/*`, `source/audit/list`.
+Key methods: `source/status`, `source/network/{getTier,setTier,evaluate}`, `source/session/*`, `source/mode/set`, `source/llm/*`, `source/context/*`, `source/checkpoint/*`, `source/approval/*`, `source/tools/*`, `source/audit/list`, plus Phase 3: `source/pty/*`, `source/rag/*`, `source/templates/*`, `source/mcp/*`, `source/browser/*`.
+
+### Phase 3 offline suite
+
+Built-ins: `fs_ops`, `terminal_exec`, `local_rag_docs`, `headless_browser`, `app_verifier`, `sqlite_db_inspector`, `git_ops`, `archive_and_system`, `symbol_search`. Templates seed under `~/.source/templates/`; MCP extensions under `~/.source/extensions/`; docs under `~/.source/offline-docs/`.
 
 ## Web shell
 
@@ -87,4 +92,4 @@ Cloud LLM connectors stay dormant until **enabled** and the tier permits egress.
 
 ## Not in this phase
 
-Phases 3–6 (full IDE, RAG retrieval, multi-node, etc.) are intentionally unimplemented. Stable interfaces Phase 2 needs are exported and fully wired.
+Phases 4–6 (full IDE UX, multi-node, etc.) are intentionally unimplemented.

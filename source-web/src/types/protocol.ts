@@ -1,6 +1,6 @@
 /** TypeScript mirrors of source-core protocol types (kept in sync by hand for Phase 1–2). */
 
-export const PROTOCOL_VERSION = "1.0.0";
+export const PROTOCOL_VERSION = "1.1.0";
 
 export type NetworkTier =
   | "LOCAL_ONLY"
@@ -80,7 +80,35 @@ export const Methods = {
   ListProviders: "source/llm/listProviders",
   ListTools: "source/tools/list",
   ListAuditEvents: "source/audit/list",
+  SearchSymbols: "source/context/searchSymbols",
+  PtyOpen: "source/pty/open",
+  PtyWrite: "source/pty/write",
+  PtyRead: "source/pty/read",
+  PtyClose: "source/pty/close",
+  PtyList: "source/pty/list",
+  RagIndex: "source/rag/index",
+  RagQuery: "source/rag/query",
+  RagStatus: "source/rag/status",
+  TemplateList: "source/templates/list",
+  TemplateScaffold: "source/templates/scaffold",
+  CacheVendorStatus: "source/cache/vendorStatus",
+  McpList: "source/mcp/list",
+  McpReload: "source/mcp/reload",
+  McpCall: "source/mcp/call",
+  BrowserNavigate: "source/browser/navigate",
+  BrowserInspect: "source/browser/inspect",
+  AppVerify: "source/browser/verifyApp",
 } as const;
+
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  input_schema: unknown;
+  categories: string[];
+  enabled: boolean;
+  offline_capable: boolean;
+  requires_wan: boolean;
+}
 
 export type DestinationClass =
   | "loopback"

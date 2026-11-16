@@ -15,14 +15,7 @@ async fn checkpoint_and_rollback_restores_file() {
     let file = workspace.join("note.txt");
     fs::write(&file, "v1").unwrap();
 
-    let paths = WorkspacePaths {
-        root: dir.path().join(".source"),
-        db_path: dir.path().join(".source/source.db"),
-        checkpoints_dir: dir.path().join(".source/checkpoints"),
-        logs_dir: dir.path().join(".source/logs"),
-        cache_dir: dir.path().join(".source/cache"),
-        static_dir: None,
-    };
+    let paths = WorkspacePaths::from_home(dir.path());
     paths.ensure_dirs().unwrap();
     let db = Db::connect(&paths.db_path).await.unwrap();
     let session_id = SessionId::new();

@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
-#[command(name = "source-daemon", about = "Source local daemon (Phase 1–2)")]
+#[command(name = "source-daemon", about = "Source local daemon (Phase 1–3)")]
 struct Args {
     /// Bind address for HTTP/WebSocket API
     #[arg(long, env = "SOURCE_BIND", default_value = "127.0.0.1:7420")]

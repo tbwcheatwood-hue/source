@@ -12,12 +12,16 @@ use serde_json::{json, Value};
 use source_core::error::CoreError;
 use source_core::policy::{NetworkPolicy, NetworkTier};
 use source_core::protocol::{
-    BuildRepoMapParams, CompactConversationParams, CompactTerminalParams, CreateCheckpointParams,
-    CreateSessionParams, EvaluateNetworkParams, InvokeToolParams, JsonRpcError, JsonRpcId,
-    JsonRpcRequest, JsonRpcResponse, ListAuditParams, Method, NetworkTierResult, Notification,
-    ProviderIdParams, RequestApprovalParams, ResolveApprovalParams, RollbackParams,
-    SessionIdParams, SetModeParams, SetNetworkTierParams, PROTOCOL_VERSION,
+    AppVerifyParams, BrowserInspectParams, BrowserNavigateParams, BuildRepoMapParams,
+    CompactConversationParams, CompactTerminalParams, CreateCheckpointParams, CreateSessionParams,
+    EvaluateNetworkParams, InvokeToolParams, JsonRpcError, JsonRpcId, JsonRpcRequest,
+    JsonRpcResponse, ListAuditParams, McpCallParams, Method, NetworkTierResult, Notification,
+    ProviderIdParams, PtyIdParams, PtyOpenParams, PtyReadParams, PtyResizeParams, PtyWriteParams,
+    RagIndexParams, RagQueryParams, RequestApprovalParams, ResolveApprovalParams, RollbackParams,
+    SearchSymbolsParams, SessionIdParams, SetModeParams, SetNetworkTierParams,
+    TemplateScaffoldParams, PROTOCOL_VERSION,
 };
+use crate::analyzer::SymbolSearchQuery;
 use source_core::types::{
     DaemonStatus, LlmProviderId, LlmRequest, Mode, ProviderConfig, ProviderStatus, SessionId,
     SessionMeta, ToolDefinition,
@@ -493,6 +497,203 @@ async fn handle_method(
                 .await
                 .map_err(|e| JsonRpcError::internal(e.to_string()))?;
             Ok(json!(list))
+        }
+        Method::SearchSymbols => {
+            let p: SearchSymbolsParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let hits = state
+                .analyzer
+                .search(
+                    PathBuf::from(&p.root).as_path(),
+                    SymbolSearchQuery {
+                        query: p.query,
+                        kind: p.kind,
+                        language: p.language,
+                        path_glob: p.path_glob,
+                        max_results: p.max_results.unwrap_or(50),
+                    },
+                )
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?;
+            Ok(json!(hits))
+        }
+        Method::PtyOpen => {
+            let p: PtyOpenParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let info = state
+                .pty
+                .open(
+                    p.cwd.map(PathBuf::from),
+                    p.shell,
+                    p.cols,
+                    p.rows,
+                    p.env,
+                )
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?;
+            Ok(json!(info))
+        }
+        Method::PtyWrite => {
+            let p: PtyWriteParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            state
+                .pty
+                .write(&p.pty_id, &p.data)
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?;
+            Ok(json!({ "ok": true }))
+        }
+        Method::PtyRead => {
+            let p: PtyReadParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let r = state
+                .pty
+                .read(&p.pty_id, p.max_bytes, p.wait_ms)
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?;
+            Ok(json!(r))
+        }
+        Method::PtyResize => {
+            let p: PtyResizeParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let info = state
+                .pty
+                .resize(&p.pty_id, p.cols, p.rows)
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?;
+            Ok(json!(info))
+        }
+        Method::PtyClose => {
+            let p: PtyIdParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let info = state
+                .pty
+                .close(&p.pty_id)
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?;
+            Ok(json!(info))
+        }
+        Method::PtyList => Ok(json!(state.pty.list())),
+        Method::RagIndex => {
+            let p: RagIndexParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let status = state
+                .rag
+                .index_docs(p.docs_root.map(PathBuf::from), p.force.unwrap_or(false))
+                .await
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?;
+            let _ = state
+                .db
+                .upsert_rag_meta(
+                    "offline-docs",
+                    &status.docs_root,
+                    &status.index_path,
+                    status.chunk_count,
+                    status.file_count,
+                    &status.status,
+                )
+                .await;
+            Ok(json!(status))
+        }
+        Method::RagQuery => {
+            let p: RagQueryParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let hits = state
+                .rag
+                .query(
+                    &p.query,
+                    p.top_k.unwrap_or(8),
+                    p.bm25_weight.unwrap_or(0.5),
+                    p.vector_weight.unwrap_or(0.5),
+                )
+                .await
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?;
+            Ok(json!(hits))
+        }
+        Method::RagStatus => {
+            let status = state
+                .rag
+                .status()
+                .await
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?;
+            Ok(json!(status))
+        }
+        Method::TemplateList => {
+            let list = state
+                .templates
+                .list()
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?;
+            Ok(json!(list))
+        }
+        Method::TemplateScaffold => {
+            let p: TemplateScaffoldParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let dest = state
+                .templates
+                .scaffold(&p.template_id, PathBuf::from(&p.dest).as_path(), p.name.as_deref())
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?;
+            Ok(json!({ "dest": dest }))
+        }
+        Method::CacheVendorStatus => {
+            let status = state
+                .templates
+                .vendor_status()
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?;
+            Ok(json!(status))
+        }
+        Method::McpList => Ok(json!(state.mcp.list_filtered())),
+        Method::McpReload => {
+            let list = state
+                .mcp
+                .reload()
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?;
+            // Re-register MCP tools into tool registry
+            for t in state.mcp.as_tool_definitions() {
+                let _ = state.db.register_tool(&t).await;
+            }
+            Ok(json!(list))
+        }
+        Method::McpCall => {
+            let p: McpCallParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let result = state
+                .mcp
+                .call_tool(&p.server_id, &p.tool_name, p.arguments)
+                .await
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?;
+            Ok(result)
+        }
+        Method::BrowserNavigate => {
+            let p: BrowserNavigateParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let r = state
+                .browser
+                .navigate(&p.url, p.session_key.as_deref(), p.wait_ms, None)
+                .await
+                .map_err(core_err)?;
+            Ok(json!(r))
+        }
+        Method::BrowserInspect => {
+            let p: BrowserInspectParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let r = state
+                .browser
+                .inspect(p.session_key.as_deref(), p.selector.as_deref(), p.script.as_deref())
+                .await
+                .map_err(core_err)?;
+            Ok(json!(r))
+        }
+        Method::AppVerify => {
+            let p: AppVerifyParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let r = state
+                .browser
+                .verify_app(
+                    &p.launch_command,
+                    p.cwd.as_deref(),
+                    &p.url,
+                    p.ready_selector.as_deref(),
+                    p.assert_text.as_deref(),
+                    p.timeout_ms,
+                    None,
+                )
+                .await
+                .map_err(core_err)?;
+            Ok(json!(r))
         }
     }
 }
