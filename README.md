@@ -6,7 +6,7 @@ Local-first agent IDE. Daemon + shared protocol (Phases 1–4), **unified dark I
 
 | Path | Role |
 |------|------|
-| `source-core` | Shared Rust types, JSON-RPC protocol **1.2.0**, network policy, mesh/cluster models |
+| `source-core` | Shared Rust types, JSON-RPC protocol **1.3.0**, network policy, mesh/cluster models |
 | `source-daemon` | Tokio + Axum + SQLite daemon (`~/.source/`), tools, RAG, MCP, mesh, static UI hosting |
 | `source-web` | React + Monaco + xterm IDE (Web + Tauri frontend) |
 | `source-desktop` | Tauri v2 shell; IPC → daemon; loads `source-web` |
@@ -76,8 +76,9 @@ IPC commands: `bridge_info`, `daemon_rpc`, `daemon_status`, `daemon_network_tier
 
 - Monaco editor + Diff Viewer (workspace via `fs_ops`)
 - xterm.js terminal (`source/pty/*`)
-- Chat / Plan·Act panel (`source/mode/set`, `source/llm/complete`)
-- Network Tier switch always in the header
+- Chat / Plan·Act panel (`source/mode/set`, `source/llm/complete` via selected local provider)
+- LLM Settings for Ollama + LM Studio (`source/llm/{list,upsert,probe,listModels,setSelected}Provider`)
+- Network Tier switch always in the header (`LOCAL_ONLY` allows localhost backends)
 - Mesh & Cluster monitor (`source/mesh/*`, `source/cluster/resources`)
 - Audit / Rollback timeline (`source/audit/list`, `source/checkpoint/*`)
 - Offline Docs & Templates (`source/rag/*`, `source/templates/*`, vendor cache)

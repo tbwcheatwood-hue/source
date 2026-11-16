@@ -9,11 +9,11 @@ use crate::mesh::{
 };
 use crate::policy::{ApprovalCategory, ApprovalDecision, NetworkTier};
 use crate::types::{
-    CheckpointId, CheckpointMeta, DaemonStatus, LlmRequest, LlmResponse, Mode, ProviderConfig,
-    SessionId, SessionMeta, ToolCall, ToolDefinition, ToolResult,
+    CheckpointId, CheckpointMeta, DaemonStatus, LlmProviderKind, LlmRequest, LlmResponse, Mode,
+    ProviderConfig, SessionId, SessionMeta, ToolCall, ToolDefinition, ToolResult,
 };
 
-pub const PROTOCOL_VERSION: &str = "1.2.0";
+pub const PROTOCOL_VERSION: &str = "1.3.0";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
@@ -159,6 +159,11 @@ pub enum Method {
     UpsertProvider,
     EnableProvider,
     DisableProvider,
+    ProbeProvider,
+    ListModels,
+    GetSelectedProvider,
+    SetSelectedProvider,
+    SetSessionProvider,
     Complete,
     BuildRepoMap,
     CompactTerminal,
@@ -230,6 +235,11 @@ impl Method {
             Self::UpsertProvider => "source/llm/upsertProvider",
             Self::EnableProvider => "source/llm/enableProvider",
             Self::DisableProvider => "source/llm/disableProvider",
+            Self::ProbeProvider => "source/llm/probeProvider",
+            Self::ListModels => "source/llm/listModels",
+            Self::GetSelectedProvider => "source/llm/getSelectedProvider",
+            Self::SetSelectedProvider => "source/llm/setSelectedProvider",
+            Self::SetSessionProvider => "source/session/setProvider",
             Self::Complete => "source/llm/complete",
             Self::BuildRepoMap => "source/context/buildRepoMap",
             Self::CompactTerminal => "source/context/compactTerminal",
@@ -299,6 +309,11 @@ impl Method {
             "source/llm/upsertProvider" => Self::UpsertProvider,
             "source/llm/enableProvider" => Self::EnableProvider,
             "source/llm/disableProvider" => Self::DisableProvider,
+            "source/llm/probeProvider" => Self::ProbeProvider,
+            "source/llm/listModels" => Self::ListModels,
+            "source/llm/getSelectedProvider" => Self::GetSelectedProvider,
+            "source/llm/setSelectedProvider" => Self::SetSelectedProvider,
+            "source/session/setProvider" => Self::SetSessionProvider,
             "source/llm/complete" => Self::Complete,
             "source/context/buildRepoMap" => Self::BuildRepoMap,
             "source/context/compactTerminal" => Self::CompactTerminal,
@@ -399,6 +414,61 @@ pub struct SetModeParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderIdParams {
+    pub provider_id: String,
+}
+
+/// Probe a stored provider or an ephemeral override (base URL / kind) through PolicyHttpClient.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProbeProviderParams {
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub kind: Option<LlmProviderKind>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProviderProbeResult {
+    pub ok: bool,
+    pub latency_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
+    pub base_url: String,
+    pub kind: LlmProviderKind,
+    pub models: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub tier: NetworkTier,
+    pub network_allowed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ListModelsParams {
+    pub provider_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ListModelsResult {
+    pub provider_id: String,
+    pub base_url: String,
+    pub kind: LlmProviderKind,
+    pub models: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SelectedProviderResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<ProviderConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SetSessionProviderParams {
+    pub session_id: SessionId,
     pub provider_id: String,
 }
 

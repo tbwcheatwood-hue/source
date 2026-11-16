@@ -18,11 +18,12 @@ use source_core::protocol::{
     CompletePairingParams, ConfirmPairingParams, CreateCheckpointParams, CreateSessionParams,
     EvaluateNetworkParams, InvokeToolParams, JsonRpcError, JsonRpcId, JsonRpcRequest,
     JsonRpcResponse, ListAuditParams, ListTasksParams, McpCallParams, MeshStartParams, Method,
-    NetworkTierResult, Notification, PeerIdParams, ProviderIdParams, PtyIdParams, PtyOpenParams,
-    PtyReadParams, PtyResizeParams, PtyWriteParams, RagIndexParams, RagQueryParams,
-    RegisterPeerParams, RejectPairingParams, RequestApprovalParams, ResolveApprovalParams,
-    RollbackParams, SearchSymbolsParams, SessionIdParams, SetModeParams, SetNetworkTierParams,
-    TaskIdParams, TemplateScaffoldParams, TrustPeerParams, PROTOCOL_VERSION,
+    ListModelsParams, NetworkTierResult, Notification, PeerIdParams, ProbeProviderParams,
+    ProviderIdParams, PtyIdParams, PtyOpenParams, PtyReadParams, PtyResizeParams, PtyWriteParams,
+    RagIndexParams, RagQueryParams, RegisterPeerParams, RejectPairingParams,
+    RequestApprovalParams, ResolveApprovalParams, RollbackParams, SearchSymbolsParams,
+    SessionIdParams, SetModeParams, SetNetworkTierParams, SetSessionProviderParams, TaskIdParams,
+    TemplateScaffoldParams, TrustPeerParams, PROTOCOL_VERSION,
 };
 use crate::analyzer::SymbolSearchQuery;
 use crate::mesh::{PairAccept, SignedEnvelope};
@@ -343,6 +344,11 @@ async fn handle_method(
             let p: CreateSessionParams = serde_json::from_value(params)
                 .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
             let now = Utc::now();
+            let selected = state
+                .llm
+                .get_selected_provider()
+                .await
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?;
             let meta = SessionMeta {
                 id: SessionId::new(),
                 title: p.title,
@@ -351,7 +357,7 @@ async fn handle_method(
                 created_at: now,
                 updated_at: now,
                 network_tier: state.policy.tier(),
-                provider_id: None,
+                provider_id: selected.provider_id.map(LlmProviderId::new),
             };
             state
                 .db
@@ -429,12 +435,79 @@ async fn handle_method(
                 .map_err(|e| JsonRpcError::internal(e.to_string()))?;
             Ok(json!({ "provider_id": p.provider_id, "enabled": false }))
         }
+        Method::ProbeProvider => {
+            let p: ProbeProviderParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let result = state
+                .llm
+                .probe(p, None)
+                .await
+                .map_err(core_err)?;
+            Ok(json!(result))
+        }
+        Method::ListModels => {
+            let p: ListModelsParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let result = state
+                .llm
+                .list_models(&p.provider_id)
+                .await
+                .map_err(core_err)?;
+            Ok(json!(result))
+        }
+        Method::GetSelectedProvider => {
+            let result = state
+                .llm
+                .get_selected_provider()
+                .await
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?;
+            Ok(json!(result))
+        }
+        Method::SetSelectedProvider => {
+            let p: ProviderIdParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let result = state
+                .llm
+                .set_selected_provider(&p.provider_id)
+                .await
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?;
+            Ok(json!(result))
+        }
+        Method::SetSessionProvider => {
+            let p: SetSessionProviderParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let provider = state
+                .db
+                .get_provider(&p.provider_id)
+                .await
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?
+                .ok_or_else(|| {
+                    core_err(CoreError::ProviderUnavailable(p.provider_id.clone()))
+                })?;
+            state
+                .db
+                .update_session_provider(&p.session_id, Some(&provider.id.0))
+                .await
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?;
+            let session = state
+                .db
+                .get_session(&p.session_id)
+                .await
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?
+                .ok_or_else(|| {
+                    core_err(CoreError::SessionNotFound(p.session_id.to_string()))
+                })?;
+            Ok(json!(session))
+        }
         Method::Complete => {
             let mut req: LlmRequest = serde_json::from_value(params)
                 .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
-            if req.provider_id.0.is_empty() {
-                req.provider_id = LlmProviderId::new("ollama-local");
-            }
+            let resolved = state
+                .llm
+                .resolve_provider_id(&req.provider_id.0, None)
+                .await
+                .map_err(core_err)?;
+            req.provider_id = LlmProviderId::new(resolved);
             let resp = state
                 .llm
                 .complete(req, None)

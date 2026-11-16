@@ -3,7 +3,8 @@ export type IdePanel =
   | "mesh"
   | "audit"
   | "docs"
-  | "tools";
+  | "tools"
+  | "settings";
 
 const ITEMS: { id: IdePanel; label: string; glyph: string }[] = [
   { id: "editor", label: "Editor", glyph: "⟨⟩" },
@@ -11,6 +12,7 @@ const ITEMS: { id: IdePanel; label: string; glyph: string }[] = [
   { id: "audit", label: "Audit / Rollback", glyph: "◷" },
   { id: "docs", label: "Docs & Templates", glyph: "☰" },
   { id: "tools", label: "Tools / MCP", glyph: "⚙" },
+  { id: "settings", label: "LLM Settings", glyph: "◧" },
 ];
 
 export function ActivityBar({
