@@ -19,7 +19,7 @@ Local-first agent IDE. Daemon + shared protocol (Phases 1–4), **unified dark I
 - `git` (shadow checkpoints)
 - Chromium/Chrome for `headless_browser` / `app_verifier`
 - Optional: NVIDIA + `nvidia-smi` for cluster GPU metrics
-- Linux desktop: WebKitGTK 4.1 / GTK 3 (Tauri)
+- Linux desktop: WebKitGTK 4.1 / GTK 3 (Tauri). Install with `./scripts/build-desktop.sh --install-deps` or see `.sourcerules`.
 
 ## Verify (preview gate)
 
@@ -67,8 +67,12 @@ pnpm --filter source-desktop tauri:dev
 Production binary (needs WebKitGTK on Linux):
 
 ```bash
+./scripts/build-desktop.sh --check-deps   # print / verify apt packages
+./scripts/build-desktop.sh --install-deps # non-interactive apt when sudo allows
 ./scripts/build-desktop.sh
 ```
+
+**Product rule:** when a user asks for a desktop app, Source ships a finished Tauri v2 project (`templates_ops` → `create_desktop_app` / template `tauri-v2-react`). Never refuse with “can’t build desktop here” or substitute HTML-only unless they asked for web-only. See `.sourcerules`.
 
 IPC commands: `bridge_info`, `daemon_rpc`, `daemon_status`, `daemon_network_tier`, `daemon_set_network_tier`, `daemon_health`. The web UI auto-uses Tauri IPC when `__TAURI_INTERNALS__` is present.
 

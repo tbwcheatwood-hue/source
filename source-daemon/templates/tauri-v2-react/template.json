@@ -1,0 +1,8 @@
+{
+  "id": "tauri-v2-react",
+  "title": "Tauri v2 + Rust + React",
+  "description": "Complete offline desktop app scaffold (Tauri v2, React, calculator-class UI) with src-tauri + build scripts",
+  "version": 2,
+  "kind": "desktop",
+  "build": "./scripts/build-desktop.sh"
+}

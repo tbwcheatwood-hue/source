@@ -18,7 +18,7 @@ mkdir -p \
   "${SOURCE_ROOT}/cache/vendor/wheels" \
   "${SOURCE_ROOT}/checkpoints"
 
-# Starter offline doc so RAG has something to index without WAN.
+# Starter offline docs so RAG has something to index without WAN.
 DOC="${SOURCE_ROOT}/offline-docs/source-overview.md"
 if [[ ! -f "${DOC}" ]]; then
   cat > "${DOC}" <<'EOF'
@@ -41,6 +41,31 @@ Plan mode is read-only. Act mode requires approval gates for File Edits, Shell, 
 Pair peers with a 6-digit PIN. Register hosts by IP or Tailscale MagicDNS.
 EOF
 fi
+
+# Always refresh desktop guardrails doc (product rule — agents must not refuse desktop builds).
+cat > "${SOURCE_ROOT}/offline-docs/desktop-apps.md" <<'EOF'
+# Desktop apps (HARD RULE)
+
+NEVER refuse native/desktop requests with “this environment can’t”, “use Electron later”, or “HTML-only instead”.
+
+When the user asks for a desktop app:
+
+1. Seed offline layout (`offline-init.sh`) so `~/.source/templates/tauri-v2-react` exists.
+2. Create via `templates_ops` `create_desktop_app` (or `source/templates/scaffold` with `tauri-v2-react`).
+3. Build with `./scripts/build-desktop.sh` / `pnpm tauri build`.
+4. If WebKitGTK/-dev packages are missing, install exact apt packages or run `--install-deps`, and still leave the complete Tauri project.
+
+HTML-only is allowed only when the user explicitly asked for a web page.
+
+Linux deps:
+
+```bash
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf \
+  pkg-config build-essential curl wget file libssl-dev \
+  libayatana-appindicator3-dev
+```
+EOF
 
 # Optional sample MCP extension (disabled echo stub via stdio python).
 EXT_DIR="${SOURCE_ROOT}/extensions/sample-echo"
