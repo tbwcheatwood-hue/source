@@ -76,11 +76,24 @@ export function ChatPanel({
         temperature: 0.2,
         max_tokens: 1024,
       });
+      const content = typeof resp?.content === "string" ? resp.content.trim() : "";
+      if (!content) {
+        const detail = [
+          "Provider returned an empty assistant message.",
+          resp?.finish_reason ? `finish_reason=${resp.finish_reason}` : null,
+          resp?.model ? `model=${resp.model}` : null,
+          resp?.provider_id ? `provider=${resp.provider_id}` : null,
+          "Check LLM Settings → Test connection, and confirm the model id.",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        throw new Error(detail);
+      }
       setTurns((prev) => [
         ...prev,
         {
           role: "assistant",
-          content: resp.content || "(empty)",
+          content,
         },
       ]);
     } catch (err) {
