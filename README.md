@@ -1,15 +1,16 @@
-# Source (Phase 1–4)
+# Source (Phase 1–6)
 
-Local-first agent IDE monorepo. **Phases 1–4**: architecture, shared protocol, daemon with network policy / LLM router / context / shadow git / Plan·Act, offline tools / RAG / MCP, plus **LAN/Tailscale mesh** with orchestrator/worker distributed compute, and web + Tauri shells wired to the daemon.
+Local-first agent IDE. Daemon + shared protocol (Phases 1–4), **unified dark IDE** (Phase 5), and **packaging / offline preview** (Phase 6).
 
 ## Layout
 
 | Path | Role |
 |------|------|
 | `source-core` | Shared Rust types, JSON-RPC protocol **1.2.0**, network policy, mesh/cluster models |
-| `source-daemon` | Tokio + Axum + SQLite daemon (`~/.source/`), offline tools, RAG, MCP, **mesh + orchestrator** |
-| `source-web` | React + TypeScript + Vite + Tailwind app shell (tier + WS client) |
-| `source-desktop` | Tauri v2 shell with real IPC → daemon JSON-RPC |
+| `source-daemon` | Tokio + Axum + SQLite daemon (`~/.source/`), tools, RAG, MCP, mesh, static UI hosting |
+| `source-web` | React + Monaco + xterm IDE (Web + Tauri frontend) |
+| `source-desktop` | Tauri v2 shell; IPC → daemon; loads `source-web` |
+| `scripts/` | smoke, offline-init, web-server build, desktop build, e2e-offline |
 
 ## Prerequisites
 
@@ -17,55 +18,35 @@ Local-first agent IDE monorepo. **Phases 1–4**: architecture, shared protocol,
 - Node **20+** and **pnpm** 9+
 - `git` (shadow checkpoints)
 - Chromium/Chrome for `headless_browser` / `app_verifier`
-- Optional: NVIDIA drivers + `nvidia-smi` for GPU/VRAM reporting in the cluster monitor
-- Linux desktop build also needs WebKitGTK 4.1 / GTK 3 (Tauri)
+- Optional: NVIDIA + `nvidia-smi` for cluster GPU metrics
+- Linux desktop: WebKitGTK 4.1 / GTK 3 (Tauri)
 
-## Build & test (Phase 1–4)
+## Verify (preview gate)
 
 ```bash
-# Rust
 cargo check -p source-core -p source-daemon
 cargo test  -p source-core -p source-daemon
-cargo check -p source-desktop   # needs WebKitGTK on Linux
-
-# Web
 pnpm install
 pnpm --filter source-web typecheck
 pnpm --filter source-web build
+./scripts/smoke-daemon.sh
+./scripts/e2e-offline.sh
 ```
 
-## Run the daemon
+## Local preview (Web Server mode)
 
 ```bash
-cargo run -p source-daemon -- --bind 127.0.0.1:7420
-# optional static hosting of the web build:
-# cargo run -p source-daemon -- --static-dir source-web/dist
+# one-time offline seed
+./scripts/offline-init.sh
+
+# build UI + serve from daemon
+./scripts/build-web-server.sh
+cargo run -p source-daemon -- --bind 127.0.0.1:7420 --static-dir source-web/dist
 ```
 
-Data directory defaults to `~/.source/` (`SOURCE_HOME` overrides the home used for that path).
+Open **http://127.0.0.1:7420/** — the IDE, JSON-RPC (`/rpc`), and WebSocket (`/ws`) share that origin.
 
-### API surface
-
-- `GET /health`
-- `GET /api/status`
-- `GET /api/network/tier`
-- `GET /api/cluster/resources` — cluster snapshot (Phase 4)
-- `POST /rpc` — JSON-RPC 2.0
-- `WS /ws` — same JSON-RPC methods + `source/hello` notification
-- `GET /mesh/pair/offer`, `POST /mesh/pair/accept` — Ed25519 + PIN pairing
-- `POST /mesh/rpc` — signed peer-to-peer mesh RPC
-
-Key methods: `source/status`, `source/network/{getTier,setTier,evaluate}`, `source/session/*`, `source/mode/set`, `source/llm/*`, `source/context/*`, `source/checkpoint/*`, `source/approval/*`, `source/tools/*`, `source/audit/list`, Phase 3: `source/pty/*`, `source/rag/*`, `source/templates/*`, `source/mcp/*`, `source/browser/*`, Phase 4: `source/mesh/*`, `source/cluster/*`, `source/llm/completeRemote`.
-
-### Phase 4 mesh
-
-- mDNS service type: `_source-mesh._tcp.local`
-- Manual IP / Tailscale MagicDNS via `source/mesh/registerPeer`
-- First-connect pairing: 6-digit PIN + Ed25519 identity + X25519 key exchange; keys in SQLite `peer_keys`
-- Mesh traffic only when network tier is `LOCAL_AND_LAN` or `UNRESTRICTED_CONFIGURABLE`
-- Orchestrator dispatches parallel worker tasks; remote inference prefers GPU peers with model/VRAM fit
-
-## Web shell
+Dev hot-reload alternative:
 
 ```bash
 # terminal A
@@ -74,30 +55,40 @@ cargo run -p source-daemon -- --bind 127.0.0.1:7420
 pnpm --filter source-web dev
 ```
 
-Open `http://127.0.0.1:5173`. The shell shows the live network tier, WS connection state, and provider list. Full cluster UI is Phase 5.
+Open `http://127.0.0.1:5173` (Vite proxies `/rpc` + `/ws`).
 
-## Desktop shell
+## Desktop preview
 
 ```bash
-# daemon must be running
+cargo run -p source-daemon -- --bind 127.0.0.1:7420
 pnpm --filter source-desktop tauri:dev
 ```
 
-IPC commands: `bridge_info`, `daemon_rpc`, `daemon_status`, `daemon_network_tier`, `daemon_set_network_tier`, `daemon_health`.
+Production binary (needs WebKitGTK on Linux):
 
-## Network tiers (enforced in daemon)
+```bash
+./scripts/build-desktop.sh
+```
 
-1. **LOCAL_ONLY** — loopback only (`127.0.0.1` / `::1`); **mesh disabled**
-2. **LOCAL_AND_LAN** — RFC 1918 + CGNAT `100.64.0.0/10` (Tailscale/WireGuard); mesh allowed
-3. **UNRESTRICTED_CONFIGURABLE** — allowlist + approval for public hosts; mesh allowed
+IPC commands: `bridge_info`, `daemon_rpc`, `daemon_status`, `daemon_network_tier`, `daemon_set_network_tier`, `daemon_health`. The web UI auto-uses Tauri IPC when `__TAURI_INTERNALS__` is present.
 
-Cloud LLM connectors stay dormant until **enabled** and the tier permits egress.
+## IDE surfaces (Phase 5)
 
-## Plan / Act
+- Monaco editor + Diff Viewer (workspace via `fs_ops`)
+- xterm.js terminal (`source/pty/*`)
+- Chat / Plan·Act panel (`source/mode/set`, `source/llm/complete`)
+- Network Tier switch always in the header
+- Mesh & Cluster monitor (`source/mesh/*`, `source/cluster/resources`)
+- Audit / Rollback timeline (`source/audit/list`, `source/checkpoint/*`)
+- Offline Docs & Templates (`source/rag/*`, `source/templates/*`, vendor cache)
+- Tools / MCP manager (`source/tools/list`, `source/mcp/*`, approvals)
 
-- **Plan** — read-only tools only
-- **Act** — File Edits, Shell, Network, MCP, Cross-Node require approval gates
+## Network tiers
 
-## Not in this phase
+1. **LOCAL_ONLY** — loopback; mesh disabled
+2. **LOCAL_AND_LAN** — RFC 1918 + CGNAT `100.64.0.0/10`; mesh allowed
+3. **UNRESTRICTED_CONFIGURABLE** — allowlist + approval for public hosts
 
-Phases **5–6** (full IDE UX, etc.) are intentionally unimplemented.
+## Data directory
+
+Defaults to `~/.source/` (`SOURCE_HOME` overrides the home used for that path). Seed with `./scripts/offline-init.sh`.

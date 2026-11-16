@@ -69,6 +69,87 @@ export interface SessionMeta {
   provider_id: string | null;
 }
 
+export interface CheckpointMeta {
+  id: string;
+  session_id: string;
+  step_index: number;
+  git_commit: string;
+  label: string;
+  created_at: string;
+  audit_event_id: string | null;
+}
+
+export type AuditEventKind =
+  | "shell"
+  | "file_diff"
+  | "network_attempt"
+  | "delegation"
+  | "mode_change"
+  | "checkpoint"
+  | "rollback"
+  | "approval"
+  | "provider_call"
+  | "tool";
+
+export interface AuditEvent {
+  id: string;
+  session_id: string | null;
+  kind: AuditEventKind;
+  summary: string;
+  detail: unknown;
+  content_hash: string;
+  prev_hash: string | null;
+  created_at: string;
+}
+
+export interface LlmMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+  tool_call_id?: string;
+  name?: string;
+}
+
+export interface LlmRequest {
+  provider_id: string;
+  messages: LlmMessage[];
+  temperature?: number;
+  max_tokens?: number;
+  stream?: boolean;
+}
+
+export interface LlmResponse {
+  provider_id: string;
+  model: string;
+  content: string;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  finish_reason: string | null;
+}
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  arguments: unknown;
+}
+
+export interface ToolResult {
+  call_id: string;
+  name: string;
+  ok: boolean;
+  output: string;
+  error?: string | null;
+}
+
+export interface ApprovalRecord {
+  id: string;
+  session_id: string | null;
+  category: string;
+  summary: string;
+  detail: unknown;
+  status: string;
+  created_at?: string;
+}
+
 export const Methods = {
   Status: "source/status",
   GetNetworkTier: "source/network/getTier",
@@ -76,14 +157,24 @@ export const Methods = {
   EvaluateNetwork: "source/network/evaluate",
   CreateSession: "source/session/create",
   ListSessions: "source/session/list",
+  GetSession: "source/session/get",
   SetMode: "source/mode/set",
   ListProviders: "source/llm/listProviders",
+  Complete: "source/llm/complete",
+  CreateCheckpoint: "source/checkpoint/create",
+  ListCheckpoints: "source/checkpoint/list",
+  Rollback: "source/checkpoint/rollback",
+  ResolveApproval: "source/approval/resolve",
+  ListPendingApprovals: "source/approval/listPending",
   ListTools: "source/tools/list",
+  InvokeTool: "source/tools/invoke",
   ListAuditEvents: "source/audit/list",
   SearchSymbols: "source/context/searchSymbols",
+  BuildRepoMap: "source/context/buildRepoMap",
   PtyOpen: "source/pty/open",
   PtyWrite: "source/pty/write",
   PtyRead: "source/pty/read",
+  PtyResize: "source/pty/resize",
   PtyClose: "source/pty/close",
   PtyList: "source/pty/list",
   RagIndex: "source/rag/index",
@@ -98,7 +189,6 @@ export const Methods = {
   BrowserNavigate: "source/browser/navigate",
   BrowserInspect: "source/browser/inspect",
   AppVerify: "source/browser/verifyApp",
-  // Phase 4
   MeshStart: "source/mesh/start",
   MeshStop: "source/mesh/stop",
   MeshStatus: "source/mesh/status",
@@ -312,4 +402,75 @@ export interface RemoteInferResponse {
   routed_peer_id: string;
   routed_address: string;
   local: boolean;
+}
+
+export interface TemplateInfo {
+  id: string;
+  title: string;
+  description: string;
+  path: string;
+  builtin: boolean;
+}
+
+export interface VendorCacheStatus {
+  root: string;
+  npm_dir: string;
+  pnpm_dir: string;
+  cargo_dir: string;
+  wheels_dir: string;
+  npm_bytes: number;
+  pnpm_bytes: number;
+  cargo_bytes: number;
+  wheels_bytes: number;
+  helpers: {
+    npm_offline_install: string;
+    pnpm_offline_install: string;
+    cargo_vendor: string;
+    pip_wheelhouse: string;
+  };
+}
+
+export interface RagStatus {
+  docs_root?: string;
+  indexed_docs?: number;
+  indexed_chunks?: number;
+  status?: string;
+  [key: string]: unknown;
+}
+
+export interface RagHit {
+  path?: string;
+  title?: string;
+  snippet?: string;
+  score?: number;
+  [key: string]: unknown;
+}
+
+export interface McpToolInfo {
+  name: string;
+  description: string;
+  input_schema: unknown;
+  offline_capable: boolean;
+  requires_wan: boolean;
+}
+
+export interface McpServerInfo {
+  id: string;
+  name: string;
+  transport: string;
+  offline_capable: boolean;
+  requires_wan: boolean;
+  enabled: boolean;
+  running: boolean;
+  tools: McpToolInfo[];
+  path: string;
+}
+
+export interface PtySessionInfo {
+  pty_id: string;
+  cwd?: string;
+  shell?: string;
+  cols?: number;
+  rows?: number;
+  [key: string]: unknown;
 }

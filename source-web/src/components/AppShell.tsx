@@ -1,121 +1,142 @@
+import { useState } from "react";
 import { useDaemon } from "../hooks/useDaemon";
-import { NetworkTier } from "../types/protocol";
-import { NetworkTierBadge } from "./NetworkTierBadge";
-
-const TIERS: NetworkTier[] = [
-  "LOCAL_ONLY",
-  "LOCAL_AND_LAN",
-  "UNRESTRICTED_CONFIGURABLE",
-];
+import { ActivityBar, IdePanel } from "./ActivityBar";
+import { AuditTimeline } from "./AuditTimeline";
+import { ChatPanel } from "./ChatPanel";
+import { DocsTemplatesPanel } from "./DocsTemplatesPanel";
+import { EditorPanel } from "./EditorPanel";
+import { MeshClusterPanel } from "./MeshClusterPanel";
+import { NetworkTierSwitch } from "./NetworkTierSwitch";
+import { TerminalPanel } from "./TerminalPanel";
+import { ToolsMcpPanel } from "./ToolsMcpPanel";
 
 export function AppShell() {
-  const { conn, connDetail, status, tierInfo, helloTier, error, setTier } = useDaemon();
+  const daemon = useDaemon();
+  const {
+    client,
+    conn,
+    connDetail,
+    status,
+    tierInfo,
+    helloTier,
+    error,
+    session,
+    workspaceRoot,
+    setWorkspaceRoot,
+    ensureSession,
+    setTier,
+    setMode,
+  } = daemon;
+
+  const [panel, setPanel] = useState<IdePanel>("editor");
+  const [termOpen, setTermOpen] = useState(true);
+
   const tier = tierInfo?.tier ?? status?.network_tier ?? helloTier ?? "LOCAL_ONLY";
+  const mode = session?.mode ?? status?.mode ?? "plan";
 
   return (
-    <div className="min-h-screen bg-mesh text-ink-50">
-      <div className="pointer-events-none fixed inset-0 opacity-40 [background-image:linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] [background-size:48px_48px]" />
-      <header className="relative z-10 border-b border-white/10 px-6 py-5 backdrop-blur-sm">
-        <div className="mx-auto flex max-w-5xl items-end justify-between gap-4">
-          <div>
-            <p className="font-display text-4xl font-bold tracking-tight text-ink-50 md:text-5xl">
-              Source
-            </p>
-            <p className="mt-1 max-w-xl font-sans text-sm text-ink-300">
-              Local-first agent IDE shell — Phase 1–2 daemon bridge
-            </p>
-          </div>
-          <NetworkTierBadge tier={tier} pulse={conn === "connecting"} />
+    <div className="flex h-screen flex-col overflow-hidden bg-mesh text-ink-50">
+      <div className="pointer-events-none fixed inset-0 opacity-30 [background-image:linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] [background-size:40px_40px]" />
+
+      <header className="relative z-20 flex shrink-0 items-center gap-4 border-b border-white/10 bg-black/30 px-4 py-2.5 backdrop-blur-md">
+        <div className="min-w-0">
+          <h1 className="font-display text-2xl font-bold leading-none tracking-tight text-ink-50 md:text-3xl">
+            Source
+          </h1>
+          <p className="mt-0.5 truncate font-mono text-[10px] text-ink-500">
+            {status
+              ? `v${status.version} · protocol ${status.protocol_version} · ${client.transport}`
+              : "connecting…"}
+          </p>
+        </div>
+
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-3">
+          <NetworkTierSwitch
+            tier={tier}
+            pulse={conn === "connecting"}
+            onChange={(t) => void setTier(t)}
+          />
+          <span
+            className={`rounded-md px-2 py-1 font-mono text-[10px] ring-1 ${
+              conn === "open"
+                ? "bg-emerald-500/10 text-emerald-200 ring-emerald-500/30"
+                : "bg-white/5 text-ink-400 ring-white/10"
+            }`}
+            title={connDetail}
+          >
+            {conn}
+          </span>
         </div>
       </header>
 
-      <main className="relative z-10 mx-auto grid max-w-5xl gap-6 px-6 py-10">
-        <section className="grid gap-3">
-          <h2 className="font-display text-2xl text-ink-100">Daemon connection</h2>
-          <p className="text-sm text-ink-300">
-            Live WebSocket + JSON-RPC to <span className="font-mono">source-daemon</span>. Full IDE
-            surfaces arrive in Phase 5; this shell proves the protocol path.
-          </p>
-          <dl className="grid gap-2 font-mono text-sm md:grid-cols-2">
-            <div className="rounded-lg bg-black/25 px-4 py-3 ring-1 ring-white/10">
-              <dt className="text-ink-400">WebSocket</dt>
-              <dd className="mt-1 text-ink-100">
-                {conn}
-                {connDetail ? ` — ${connDetail}` : ""}
-              </dd>
-            </div>
-            <div className="rounded-lg bg-black/25 px-4 py-3 ring-1 ring-white/10">
-              <dt className="text-ink-400">Protocol</dt>
-              <dd className="mt-1 text-ink-100">
-                {status?.protocol_version ?? "—"} / daemon {status?.version ?? "—"}
-              </dd>
-            </div>
-            <div className="rounded-lg bg-black/25 px-4 py-3 ring-1 ring-white/10">
-              <dt className="text-ink-400">Uptime</dt>
-              <dd className="mt-1 text-ink-100">{status ? `${status.uptime_secs}s` : "—"}</dd>
-            </div>
-            <div className="rounded-lg bg-black/25 px-4 py-3 ring-1 ring-white/10">
-              <dt className="text-ink-400">Data root</dt>
-              <dd className="mt-1 truncate text-ink-100">{status?.data_root ?? "—"}</dd>
-            </div>
-          </dl>
-          {error ? (
-            <p className="rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-200 ring-1 ring-red-500/30">
-              {error}
-            </p>
-          ) : null}
-        </section>
+      <div className="relative z-10 flex min-h-0 flex-1">
+        <ActivityBar active={panel} onSelect={setPanel} />
 
-        <section className="grid gap-3">
-          <h2 className="font-display text-2xl text-ink-100">Network policy</h2>
-          <p className="text-sm text-ink-300">
-            Three-tier engine enforced in the daemon HTTP/WS client and tool gate — not prompts.
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {TIERS.map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => void setTier(t)}
-                className={`rounded-md px-3 py-2 text-sm ring-1 transition ${
-                  tier === t
-                    ? "bg-ember-500/20 text-ember-400 ring-ember-500/50"
-                    : "bg-white/5 text-ink-200 ring-white/10 hover:bg-white/10"
-                }`}
-              >
-                {t}
-              </button>
-            ))}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex items-center gap-2 border-b border-white/10 bg-black/15 px-3 py-1.5">
+            <label className="flex min-w-0 flex-1 items-center gap-2 font-mono text-[10px] text-ink-500">
+              workspace
+              <input
+                value={workspaceRoot}
+                onChange={(e) => setWorkspaceRoot(e.target.value)}
+                className="ide-input min-w-0 flex-1 py-1"
+              />
+            </label>
+            <button
+              type="button"
+              className="ide-btn"
+              onClick={() => setTermOpen((v) => !v)}
+              title="Toggle terminal"
+            >
+              {termOpen ? "Hide term" : "Show term"}
+            </button>
           </div>
-          {tierInfo ? (
-            <pre className="overflow-auto rounded-lg bg-black/30 p-4 font-mono text-xs text-ink-200 ring-1 ring-white/10">
-              {JSON.stringify(tierInfo, null, 2)}
-            </pre>
-          ) : null}
-        </section>
 
-        <section className="grid gap-3">
-          <h2 className="font-display text-2xl text-ink-100">Providers</h2>
-          <ul className="grid gap-2 md:grid-cols-2">
-            {(status?.providers ?? []).map((p) => (
-              <li
-                key={p.id}
-                className="rounded-lg bg-black/25 px-4 py-3 ring-1 ring-white/10"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-medium text-ink-100">{p.display_name}</span>
-                  <span
-                    className={`text-xs font-mono ${p.enabled ? "text-emerald-300" : "text-ink-400"}`}
-                  >
-                    {p.enabled ? "enabled" : "dormant"}
-                  </span>
-                </div>
-                <p className="mt-1 truncate font-mono text-xs text-ink-400">{p.base_url}</p>
-              </li>
-            ))}
-          </ul>
-        </section>
-      </main>
+          <div className="min-h-0 flex-1">
+            {panel === "editor" ? (
+              <EditorPanel
+                client={client}
+                session={session}
+                workspaceRoot={workspaceRoot}
+                ensureSession={ensureSession}
+              />
+            ) : null}
+            {panel === "mesh" ? <MeshClusterPanel client={client} /> : null}
+            {panel === "audit" ? (
+              <AuditTimeline
+                client={client}
+                session={session}
+                workspaceRoot={workspaceRoot}
+                ensureSession={ensureSession}
+              />
+            ) : null}
+            {panel === "docs" ? (
+              <DocsTemplatesPanel client={client} workspaceRoot={workspaceRoot} />
+            ) : null}
+            {panel === "tools" ? <ToolsMcpPanel client={client} /> : null}
+          </div>
+
+          {termOpen ? (
+            <div className="h-48 shrink-0 md:h-56">
+              <TerminalPanel client={client} cwd={workspaceRoot} />
+            </div>
+          ) : null}
+        </div>
+
+        <ChatPanel
+          client={client}
+          session={session}
+          mode={mode}
+          ensureSession={ensureSession}
+          setMode={setMode}
+        />
+      </div>
+
+      {error ? (
+        <div className="relative z-20 border-t border-red-500/30 bg-red-950/80 px-4 py-2 text-sm text-red-100">
+          {error}
+        </div>
+      ) : null}
     </div>
   );
 }

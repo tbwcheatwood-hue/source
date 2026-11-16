@@ -2,7 +2,7 @@
   "name": "source",
   "private": true,
   "version": "0.1.0",
-  "description": "Source IDE monorepo — Phase 1–2",
+  "description": "Source IDE monorepo — Phase 1–6",
   "packageManager": "pnpm@9.15.0",
   "scripts": {
     "build:web": "pnpm --filter source-web build",
@@ -10,8 +10,14 @@
     "typecheck:web": "pnpm --filter source-web typecheck",
     "lint:web": "pnpm --filter source-web lint",
     "daemon": "cargo run -p source-daemon --",
-    "check:rust": "cargo check --workspace",
-    "test:rust": "cargo test --workspace"
+    "preview:web-server": "pnpm build:web && cargo run -p source-daemon -- --bind 127.0.0.1:7420 --static-dir source-web/dist",
+    "offline-init": "./scripts/offline-init.sh",
+    "smoke": "./scripts/smoke-daemon.sh",
+    "e2e:offline": "./scripts/e2e-offline.sh",
+    "build:web-server": "./scripts/build-web-server.sh",
+    "build:desktop": "./scripts/build-desktop.sh",
+    "check:rust": "cargo check -p source-core -p source-daemon",
+    "test:rust": "cargo test -p source-core -p source-daemon"
   },
   "engines": {
     "node": ">=20"
