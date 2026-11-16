@@ -1,0 +1,9 @@
+target/
+node_modules/
+dist/
+.source/
+.source-checkpoints/
+*.db
+.DS_Store
+source-web/dist/
+source-desktop/dist/

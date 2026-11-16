@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Source Desktop</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #121c18;
+        --fg: #e3ebe6;
+        --muted: #9bb8a6;
+        --accent: #d4843a;
+        --panel: rgba(0, 0, 0, 0.28);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+        color: var(--fg);
+        background:
+          radial-gradient(ellipse at 15% 0%, rgba(212,132,58,0.16), transparent 45%),
+          radial-gradient(ellipse at 85% 10%, rgba(79,118,98,0.28), transparent 40%),
+          linear-gradient(165deg, #121c18, #0f1613 70%);
+      }
+      main { max-width: 720px; margin: 0 auto; padding: 48px 24px; }
+      h1 {
+        font-family: Georgia, "Fraunces", serif;
+        font-size: 3rem;
+        margin: 0 0 8px;
+        letter-spacing: -0.02em;
+      }
+      p { color: var(--muted); line-height: 1.5; }
+      .card {
+        margin-top: 24px;
+        padding: 16px 18px;
+        border-radius: 12px;
+        background: var(--panel);
+        border: 1px solid rgba(255,255,255,0.08);
+      }
+      .row { display: flex; justify-content: space-between; gap: 12px; margin: 8px 0; }
+      code, pre { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; }
+      button {
+        margin-top: 12px;
+        background: rgba(212,132,58,0.2);
+        color: #e8a35c;
+        border: 1px solid rgba(212,132,58,0.45);
+        border-radius: 8px;
+        padding: 8px 14px;
+        cursor: pointer;
+      }
+      button:hover { background: rgba(212,132,58,0.3); }
+      .err { color: #f5a8a8; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

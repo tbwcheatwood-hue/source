@@ -1,0 +1,21 @@
+[package]
+name = "source-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared types, protocol, policy, and context definitions for Source"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+ipnet = { workspace = true }
+schemars = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

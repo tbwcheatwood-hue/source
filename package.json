@@ -1,0 +1,19 @@
+{
+  "name": "source",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Source IDE monorepo — Phase 1–2",
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "build:web": "pnpm --filter source-web build",
+    "dev:web": "pnpm --filter source-web dev",
+    "typecheck:web": "pnpm --filter source-web typecheck",
+    "lint:web": "pnpm --filter source-web lint",
+    "daemon": "cargo run -p source-daemon --",
+    "check:rust": "cargo check --workspace",
+    "test:rust": "cargo test --workspace"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

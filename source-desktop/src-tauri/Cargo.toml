@@ -1,0 +1,29 @@
+[package]
+name = "source-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Source desktop shell (Tauri v2) with IPC bridge to source-daemon"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+source-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+
+[lib]
+name = "source_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "source-desktop"
+path = "src/main.rs"
