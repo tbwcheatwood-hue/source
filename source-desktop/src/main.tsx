@@ -1,3 +1,7 @@
+/**
+ * Local Vite entry for source-desktop package tooling only.
+ * Tauri loads the unified Source IDE from `source-web` (see tauri.conf.json).
+ */
 import { StrictMode, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
@@ -8,20 +12,13 @@ interface BridgeInfo {
   desktop_version: string;
 }
 
-function DesktopApp() {
+function DesktopBridgeSmoke() {
   const [info, setInfo] = useState<BridgeInfo | null>(null);
-  const [status, setStatus] = useState<unknown>(null);
-  const [tier, setTier] = useState<unknown>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const bi = await invoke<BridgeInfo>("bridge_info");
-      setInfo(bi);
-      const st = await invoke("daemon_status");
-      setStatus(st);
-      const ti = await invoke("daemon_network_tier");
-      setTier(ti);
+      setInfo(await invoke<BridgeInfo>("bridge_info"));
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -33,38 +30,17 @@ function DesktopApp() {
   }, [refresh]);
 
   return (
-    <main>
-      <h1>Source</h1>
-      <p>Desktop shell with Tauri IPC → source-daemon JSON-RPC (Phase 1–2).</p>
-
-      <div className="card">
-        <div className="row">
-          <span>Bridge protocol</span>
-          <code>{info?.protocol_version ?? "—"}</code>
-        </div>
-        <div className="row">
-          <span>Desktop</span>
-          <code>{info?.desktop_version ?? "—"}</code>
-        </div>
-        <div className="row">
-          <span>Daemon URL</span>
-          <code>{info?.daemon_base_url ?? "—"}</code>
-        </div>
-        <button type="button" onClick={() => void refresh()}>
-          Refresh via IPC
-        </button>
-        {error ? <p className="err">{error}</p> : null}
-      </div>
-
-      <div className="card">
-        <strong>Network tier (via IPC)</strong>
-        <pre>{JSON.stringify(tier, null, 2)}</pre>
-      </div>
-
-      <div className="card">
-        <strong>Daemon status (via IPC)</strong>
-        <pre>{JSON.stringify(status, null, 2)}</pre>
-      </div>
+    <main style={{ fontFamily: "IBM Plex Sans, sans-serif", padding: 24, color: "#e3ebe6" }}>
+      <h1 style={{ fontFamily: "Fraunces, Georgia, serif" }}>Source</h1>
+      <p>
+        Tauri production UI is <code>source-web</code>. This page is only the package-local Vite
+        entry for IPC smoke.
+      </p>
+      <pre>{JSON.stringify(info, null, 2)}</pre>
+      {error ? <p style={{ color: "#f5a8a8" }}>{error}</p> : null}
+      <button type="button" onClick={() => void refresh()}>
+        Refresh bridge_info
+      </button>
     </main>
   );
 }
@@ -74,6 +50,6 @@ if (!root) throw new Error("missing #root");
 
 createRoot(root).render(
   <StrictMode>
-    <DesktopApp />
+    <DesktopBridgeSmoke />
   </StrictMode>,
 );

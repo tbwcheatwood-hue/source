@@ -4,6 +4,9 @@
 
 :root {
   color-scheme: dark;
+  --ink-950: #121c18;
+  --ink-50: #f4f7f5;
+  --ember: #d4843a;
 }
 
 body {
@@ -11,12 +14,29 @@ body {
   min-height: 100vh;
   font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+  background: var(--ink-950);
+  color: var(--ink-50);
 }
 
-@keyframes rise-in {
+#root {
+  min-height: 100vh;
+}
+
+@layer components {
+  .ide-btn {
+    @apply inline-flex items-center rounded-md bg-white/5 px-2.5 py-1.5 font-mono text-xs text-ink-200 ring-1 ring-white/10 transition hover:bg-white/10 hover:text-ink-50 disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .ide-input {
+    @apply rounded-md bg-black/30 px-2.5 py-1.5 font-mono text-xs text-ink-100 outline-none ring-1 ring-white/10 focus:ring-ember-500/40;
+  }
+}
+
+/* Soft entrance for side panels */
+@keyframes panel-in {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(6px);
   }
   to {
     opacity: 1;
@@ -24,14 +44,25 @@ body {
   }
 }
 
-main > section {
-  animation: rise-in 0.5s ease-out both;
+@keyframes tier-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(212, 132, 58, 0);
+  }
+  50% {
+    box-shadow: 0 0 12px 0 rgba(212, 132, 58, 0.25);
+  }
 }
 
-main > section:nth-child(2) {
-  animation-delay: 0.08s;
+header h1 {
+  animation: panel-in 0.45s ease-out both;
 }
 
-main > section:nth-child(3) {
-  animation-delay: 0.16s;
+.xterm {
+  height: 100%;
+  padding: 0;
+}
+
+.xterm-viewport {
+  overflow-y: auto !important;
 }
