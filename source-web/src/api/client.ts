@@ -31,6 +31,7 @@ import {
   RagStatus,
   RagHit,
   McpServerInfo,
+  McpUpsertParams,
   Mode,
 } from "../types/protocol";
 
@@ -441,6 +442,10 @@ export class SourceClient {
     return this.rpc(Methods.McpList);
   }
 
+  mcpListAll(): Promise<McpServerInfo[]> {
+    return this.rpc(Methods.McpListAll);
+  }
+
   mcpReload(): Promise<McpServerInfo[]> {
     return this.rpc(Methods.McpReload);
   }
@@ -451,6 +456,26 @@ export class SourceClient {
       tool_name: toolName,
       arguments: args,
     });
+  }
+
+  mcpUpsert(params: McpUpsertParams): Promise<McpServerInfo> {
+    return this.rpc(Methods.McpUpsert, params);
+  }
+
+  mcpDelete(serverId: string): Promise<{ deleted: string }> {
+    return this.rpc(Methods.McpDelete, { server_id: serverId });
+  }
+
+  mcpSetEnabled(serverId: string, enabled: boolean): Promise<McpServerInfo> {
+    return this.rpc(Methods.McpSetEnabled, { server_id: serverId, enabled });
+  }
+
+  stateGet(key: string): Promise<{ key: string; value: unknown }> {
+    return this.rpc(Methods.StateGet, { key });
+  }
+
+  stateSet(key: string, value: unknown): Promise<{ key: string; ok: boolean }> {
+    return this.rpc(Methods.StateSet, { key, value });
   }
 
   async fsOp(

@@ -60,6 +60,12 @@ pub struct McpServerInfo {
     pub running: bool,
     pub tools: Vec<McpToolInfo>,
     pub path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub env: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,6 +163,9 @@ impl McpHost {
             .iter()
             .filter_map(|e| {
                 let mut info = e.value().info.clone();
+                if !info.enabled {
+                    return None;
+                }
                 if !tool_allowed_for_tier(info.offline_capable, info.requires_wan, tier) {
                     return None;
                 }
@@ -168,7 +177,119 @@ impl McpHost {
     }
 
     pub fn list_all(&self) -> Vec<McpServerInfo> {
-        self.servers.iter().map(|e| e.value().info.clone()).collect()
+        let mut out: Vec<_> = self
+            .servers
+            .iter()
+            .map(|e| e.value().info.clone())
+            .collect();
+        out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        out
+    }
+
+    /// Persist a manifest under `~/.source/extensions/{id}/mcp.json` and hot-reload it.
+    pub fn upsert(&self, manifest: McpServerManifest) -> Result<McpServerInfo> {
+        if manifest.id.trim().is_empty() {
+            return Err(anyhow!("mcp server id is required"));
+        }
+        if manifest.name.trim().is_empty() {
+            return Err(anyhow!("mcp server name is required"));
+        }
+        match manifest.transport.as_str() {
+            "stdio" => {
+                let cmd = manifest
+                    .command
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("stdio transport requires command"))?;
+                if cmd.is_empty() || cmd[0].trim().is_empty() {
+                    return Err(anyhow!("stdio command must be non-empty"));
+                }
+            }
+            "sse" | "streamable_http" => {
+                let url = manifest
+                    .url
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("{} transport requires url", manifest.transport))?;
+                if url.trim().is_empty() {
+                    return Err(anyhow!("url must be non-empty"));
+                }
+            }
+            other => return Err(anyhow!("unsupported transport {other}")),
+        }
+
+        let dir = self.extensions_dir.join(&manifest.id);
+        fs::create_dir_all(&dir)?;
+        let path = dir.join("mcp.json");
+        let text = serde_json::to_string_pretty(&manifest)?;
+        fs::write(&path, text)?;
+
+        // Stop previous instance if any
+        if let Some((_, old)) = self.servers.remove(&manifest.id) {
+            if let Some(stdio) = old.stdio {
+                let mut s = stdio.lock();
+                let _ = s.child.kill();
+            }
+        }
+
+        let loaded = start_server(manifest, path, &self.policy)?;
+        let info = loaded.info.clone();
+        self.servers.insert(info.id.clone(), loaded);
+        Ok(info)
+    }
+
+    pub fn delete(&self, server_id: &str) -> Result<()> {
+        if let Some((_, old)) = self.servers.remove(server_id) {
+            if let Some(stdio) = old.stdio {
+                let mut s = stdio.lock();
+                let _ = s.child.kill();
+            }
+            // Remove on-disk manifest (file or directory under extensions)
+            let dir = self.extensions_dir.join(server_id);
+            if dir.is_dir() {
+                let _ = fs::remove_dir_all(&dir);
+            }
+            if old.info.path.exists() {
+                let _ = fs::remove_file(&old.info.path);
+                if let Some(parent) = old.info.path.parent() {
+                    if parent != self.extensions_dir {
+                        let _ = fs::remove_dir(parent);
+                    }
+                }
+            }
+            Ok(())
+        } else {
+            // Still try to clean disk
+            let dir = self.extensions_dir.join(server_id);
+            if dir.is_dir() {
+                fs::remove_dir_all(&dir)?;
+                Ok(())
+            } else {
+                Err(anyhow!("unknown MCP server {server_id}"))
+            }
+        }
+    }
+
+    pub fn set_enabled(&self, server_id: &str, enabled: bool) -> Result<McpServerInfo> {
+        let existing = self
+            .servers
+            .get(server_id)
+            .ok_or_else(|| anyhow!("unknown MCP server {server_id}"))?;
+        let mut manifest = existing.manifest.clone();
+        let path = existing.info.path.clone();
+        drop(existing);
+        manifest.enabled = enabled;
+        let text = serde_json::to_string_pretty(&manifest)?;
+        fs::write(&path, text)?;
+
+        if let Some((_, old)) = self.servers.remove(server_id) {
+            if let Some(stdio) = old.stdio {
+                let mut s = stdio.lock();
+                let _ = s.child.kill();
+            }
+        }
+        let loaded = start_server(manifest, path, &self.policy)?;
+        let info = loaded.info.clone();
+        self.servers.insert(info.id.clone(), loaded);
+        Ok(info)
     }
 
     pub async fn call_tool(
@@ -182,6 +303,9 @@ impl McpHost {
             .servers
             .get(server_id)
             .ok_or_else(|| anyhow!("unknown MCP server {server_id}"))?;
+        if !server.manifest.enabled {
+            return Err(anyhow!("MCP server {server_id} is disabled"));
+        }
         if !tool_allowed_for_tier(server.manifest.offline_capable, server.manifest.requires_wan, tier)
         {
             return Err(anyhow!(
@@ -369,6 +493,28 @@ fn start_server(
     let mut stdio = None;
     let mut running = false;
 
+    if !manifest.enabled {
+        let info = McpServerInfo {
+            id: manifest.id.clone(),
+            name: manifest.name.clone(),
+            transport: manifest.transport.clone(),
+            offline_capable: manifest.offline_capable,
+            requires_wan: manifest.requires_wan,
+            enabled: false,
+            running: false,
+            tools: Vec::new(),
+            path,
+            command: manifest.command.clone(),
+            url: manifest.url.clone(),
+            env: manifest.env.clone(),
+        };
+        return Ok(LoadedServer {
+            info,
+            manifest,
+            stdio: None,
+        });
+    }
+
     match manifest.transport.as_str() {
         "stdio" => {
             let cmd = manifest
@@ -503,6 +649,9 @@ fn start_server(
         running,
         tools,
         path,
+        command: manifest.command.clone(),
+        url: manifest.url.clone(),
+        env: manifest.env.clone(),
     };
     Ok(LoadedServer {
         info,
@@ -559,6 +708,8 @@ async fn call_http_mcp(base_url: &str, tool_name: &str, arguments: Value) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy::PolicyEngine;
+    use tempfile::tempdir;
 
     #[test]
     fn tier_filters_wan_tools() {
@@ -566,5 +717,39 @@ mod tests {
         assert!(!tool_allowed_for_tier(true, true, NetworkTier::LocalOnly));
         assert!(!tool_allowed_for_tier(false, false, NetworkTier::LocalAndLan));
         assert!(tool_allowed_for_tier(false, true, NetworkTier::UnrestrictedConfigurable));
+    }
+
+    #[tokio::test]
+    async fn upsert_delete_sse_server_on_disk() {
+        let dir = tempdir().unwrap();
+        let db = crate::db::Db::connect(&dir.path().join("t.db")).await.unwrap();
+        let policy = PolicyEngine::load(db).await.unwrap();
+        let host = McpHost::start(dir.path().join("extensions"), policy).unwrap();
+        let info = host
+            .upsert(McpServerManifest {
+                id: "demo-sse".into(),
+                name: "Demo SSE".into(),
+                transport: "sse".into(),
+                command: None,
+                url: Some("http://127.0.0.1:9999/mcp".into()),
+                offline_capable: true,
+                requires_wan: false,
+                enabled: true,
+                env: HashMap::new(),
+            })
+            .unwrap();
+        assert_eq!(info.id, "demo-sse");
+        assert!(dir
+            .path()
+            .join("extensions")
+            .join("demo-sse")
+            .join("mcp.json")
+            .exists());
+        assert_eq!(host.list_all().len(), 1);
+        host.set_enabled("demo-sse", false).unwrap();
+        assert!(!host.list_all()[0].enabled);
+        assert!(host.list_filtered().is_empty());
+        host.delete("demo-sse").unwrap();
+        assert!(host.list_all().is_empty());
     }
 }

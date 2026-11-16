@@ -6,7 +6,7 @@ Local-first agent IDE. Daemon + shared protocol (Phases 1–4), **unified dark I
 
 | Path | Role |
 |------|------|
-| `source-core` | Shared Rust types, JSON-RPC protocol **1.3.0**, network policy, mesh/cluster models |
+| `source-core` | Shared Rust types, JSON-RPC protocol **1.4.0**, network policy, mesh/cluster models |
 | `source-daemon` | Tokio + Axum + SQLite daemon (`~/.source/`), tools, RAG, MCP, mesh, static UI hosting |
 | `source-web` | React + Monaco + xterm IDE (Web + Tauri frontend) |
 | `source-desktop` | Tauri v2 shell; IPC → daemon; loads `source-web` |
@@ -86,7 +86,8 @@ IPC commands: `bridge_info`, `daemon_rpc`, `daemon_status`, `daemon_network_tier
 - Mesh & Cluster monitor (`source/mesh/*`, `source/cluster/resources`)
 - Audit / Rollback timeline (`source/audit/list`, `source/checkpoint/*`)
 - Offline Docs & Templates (`source/rag/*`, `source/templates/*`, vendor cache)
-- Tools / MCP manager (`source/tools/list`, `source/mcp/*`, approvals)
+- Resizable IDE panes (left sidebar / center / Plan·Act) with localStorage + `source/state/*` persistence
+- Tools / MCP manager (`source/tools/list`, `source/mcp/{list,listAll,reload,upsert,delete,setEnabled,call}`, approvals)
 
 ## Network tiers
 

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useDaemon } from "../hooks/useDaemon";
+import { LAYOUT_DEFAULTS, LAYOUT_LIMITS, useIdeLayout } from "../hooks/useIdeLayout";
 import { ActivityBar, IdePanel } from "./ActivityBar";
 import { AuditTimeline } from "./AuditTimeline";
 import { ChatPanel } from "./ChatPanel";
@@ -7,6 +8,7 @@ import { DocsTemplatesPanel } from "./DocsTemplatesPanel";
 import { EditorPanel } from "./EditorPanel";
 import { MeshClusterPanel } from "./MeshClusterPanel";
 import { NetworkTierSwitch } from "./NetworkTierSwitch";
+import { PaneSplitter } from "./PaneSplitter";
 import { TerminalPanel } from "./TerminalPanel";
 import { SettingsProvidersPanel } from "./SettingsProvidersPanel";
 import { ToolsMcpPanel } from "./ToolsMcpPanel";
@@ -33,7 +35,7 @@ export function AppShell() {
   } = daemon;
 
   const [panel, setPanel] = useState<IdePanel>("editor");
-  const [termOpen, setTermOpen] = useState(true);
+  const { layout, update, reset, effectiveLeft, effectiveRight } = useIdeLayout(client);
 
   const tier = tierInfo?.tier ?? status?.network_tier ?? helloTier ?? "LOCAL_ONLY";
   const mode = session?.mode ?? status?.mode ?? "plan";
@@ -55,6 +57,23 @@ export function AppShell() {
         </div>
 
         <div className="ml-auto flex flex-wrap items-center justify-end gap-3">
+          <button
+            type="button"
+            className="ide-btn"
+            title="Reset pane sizes to defaults"
+            onClick={() => reset()}
+          >
+            Reset layout
+          </button>
+          {layout.rightCollapsed ? (
+            <button
+              type="button"
+              className="ide-btn"
+              onClick={() => update({ rightCollapsed: false })}
+            >
+              Show chat
+            </button>
+          ) : null}
           <NetworkTierSwitch
             tier={tier}
             pulse={conn === "connecting"}
@@ -74,7 +93,52 @@ export function AppShell() {
       </header>
 
       <div className="relative z-10 flex min-h-0 flex-1">
-        <ActivityBar active={panel} onSelect={setPanel} />
+        <ActivityBar
+          active={panel}
+          onSelect={setPanel}
+          width={effectiveLeft}
+          collapsed={layout.leftCollapsed}
+          onToggleCollapse={() =>
+            update((prev) => ({
+              ...prev,
+              leftCollapsed: !prev.leftCollapsed,
+              leftWidth: prev.leftCollapsed
+                ? Math.max(prev.leftWidth, LAYOUT_DEFAULTS.leftWidth)
+                : prev.leftWidth,
+            }))
+          }
+        />
+
+        <PaneSplitter
+          axis="horizontal"
+          label="Resize left sidebar"
+          onDrag={(delta) =>
+            update((prev) => {
+              if (prev.leftCollapsed && delta > 0) {
+                return {
+                  ...prev,
+                  leftCollapsed: false,
+                  leftWidth: LAYOUT_LIMITS.leftMin + delta,
+                };
+              }
+              const next = prev.leftWidth + delta;
+              if (next < LAYOUT_LIMITS.leftMin + 8) {
+                return { ...prev, leftCollapsed: true, leftWidth: LAYOUT_LIMITS.leftMin };
+              }
+              return {
+                ...prev,
+                leftCollapsed: false,
+                leftWidth: Math.min(LAYOUT_LIMITS.leftMax, Math.max(LAYOUT_LIMITS.leftMin, next)),
+              };
+            })
+          }
+          onReset={() =>
+            update({
+              leftWidth: LAYOUT_DEFAULTS.leftWidth,
+              leftCollapsed: false,
+            })
+          }
+        />
 
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex items-center gap-2 border-b border-white/10 bg-black/15 px-3 py-1.5">
@@ -89,10 +153,10 @@ export function AppShell() {
             <button
               type="button"
               className="ide-btn"
-              onClick={() => setTermOpen((v) => !v)}
+              onClick={() => update({ termOpen: !layout.termOpen })}
               title="Toggle terminal"
             >
-              {termOpen ? "Hide term" : "Show term"}
+              {layout.termOpen ? "Hide term" : "Show term"}
             </button>
           </div>
 
@@ -130,21 +194,68 @@ export function AppShell() {
             ) : null}
           </div>
 
-          {termOpen ? (
-            <div className="h-48 shrink-0 md:h-56">
-              <TerminalPanel client={client} cwd={workspaceRoot} />
-            </div>
+          {layout.termOpen ? (
+            <>
+              <PaneSplitter
+                axis="vertical"
+                label="Resize terminal"
+                onDrag={(delta) =>
+                  update((prev) => ({
+                    ...prev,
+                    terminalHeight: Math.min(
+                      LAYOUT_LIMITS.termMax,
+                      Math.max(LAYOUT_LIMITS.termMin, prev.terminalHeight - delta),
+                    ),
+                  }))
+                }
+                onReset={() => update({ terminalHeight: LAYOUT_DEFAULTS.terminalHeight })}
+              />
+              <div className="shrink-0" style={{ height: layout.terminalHeight }}>
+                <TerminalPanel client={client} cwd={workspaceRoot} />
+              </div>
+            </>
           ) : null}
         </div>
 
-        <ChatPanel
-          client={client}
-          session={session}
-          mode={mode}
-          selectedProviderId={selectedProviderId}
-          ensureSession={ensureSession}
-          setMode={setMode}
-        />
+        {!layout.rightCollapsed ? (
+          <>
+            <PaneSplitter
+              axis="horizontal"
+              label="Resize Plan · Act panel"
+              onDrag={(delta) =>
+                update((prev) => {
+                  const next = prev.rightWidth - delta;
+                  if (next < LAYOUT_LIMITS.rightMin - 20) {
+                    return { ...prev, rightCollapsed: true };
+                  }
+                  return {
+                    ...prev,
+                    rightWidth: Math.min(
+                      LAYOUT_LIMITS.rightMax,
+                      Math.max(LAYOUT_LIMITS.rightMin, next),
+                    ),
+                  };
+                })
+              }
+              onReset={() =>
+                update({
+                  rightWidth: LAYOUT_DEFAULTS.rightWidth,
+                  rightCollapsed: false,
+                })
+              }
+            />
+            <ChatPanel
+              client={client}
+              session={session}
+              mode={mode}
+              selectedProviderId={selectedProviderId}
+              ensureSession={ensureSession}
+              setMode={setMode}
+              width={effectiveRight}
+              onToggleCollapse={() => update({ rightCollapsed: true })}
+            />
+          </>
+        ) : null}
       </div>
 
       {error ? (

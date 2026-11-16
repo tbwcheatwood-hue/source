@@ -1,6 +1,6 @@
-/** TypeScript mirrors of source-core protocol types (kept in sync by hand). Protocol 1.3.0. */
+/** TypeScript mirrors of source-core protocol types (kept in sync by hand). Protocol 1.4.0. */
 
-export const PROTOCOL_VERSION = "1.3.0";
+export const PROTOCOL_VERSION = "1.4.0";
 
 export type NetworkTier =
   | "LOCAL_ONLY"
@@ -245,8 +245,14 @@ export const Methods = {
   TemplateScaffold: "source/templates/scaffold",
   CacheVendorStatus: "source/cache/vendorStatus",
   McpList: "source/mcp/list",
+  McpListAll: "source/mcp/listAll",
   McpReload: "source/mcp/reload",
   McpCall: "source/mcp/call",
+  McpUpsert: "source/mcp/upsert",
+  McpDelete: "source/mcp/delete",
+  McpSetEnabled: "source/mcp/setEnabled",
+  StateGet: "source/state/get",
+  StateSet: "source/state/set",
   BrowserNavigate: "source/browser/navigate",
   BrowserInspect: "source/browser/inspect",
   AppVerify: "source/browser/verifyApp",
@@ -528,6 +534,23 @@ export interface McpServerInfo {
   running: boolean;
   tools: McpToolInfo[];
   path: string;
+  command?: string[] | null;
+  url?: string | null;
+  env?: Record<string, string>;
+}
+
+export type McpTransport = "stdio" | "sse" | "streamable_http";
+
+export interface McpUpsertParams {
+  id: string;
+  name: string;
+  transport: McpTransport;
+  command?: string[] | null;
+  url?: string | null;
+  offline_capable?: boolean;
+  requires_wan?: boolean;
+  enabled?: boolean;
+  env?: Record<string, string>;
 }
 
 export interface PtySessionInfo {

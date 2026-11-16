@@ -17,14 +17,16 @@ use source_core::protocol::{
     BuildRepoMapParams, ClusterDispatchParams, CompactConversationParams, CompactTerminalParams,
     CompletePairingParams, ConfirmPairingParams, CreateCheckpointParams, CreateSessionParams,
     EvaluateNetworkParams, InvokeToolParams, JsonRpcError, JsonRpcId, JsonRpcRequest,
-    JsonRpcResponse, ListAuditParams, ListTasksParams, McpCallParams, MeshStartParams, Method,
-    ListModelsParams, NetworkTierResult, Notification, PeerIdParams, ProbeProviderParams,
-    ProviderIdParams, PtyIdParams, PtyOpenParams, PtyReadParams, PtyResizeParams, PtyWriteParams,
-    RagIndexParams, RagQueryParams, RegisterPeerParams, RejectPairingParams,
-    RequestApprovalParams, ResolveApprovalParams, RollbackParams, SearchSymbolsParams,
-    SessionIdParams, SetModeParams, SetNetworkTierParams, SetSessionProviderParams, TaskIdParams,
+    JsonRpcResponse, ListAuditParams, ListTasksParams, McpCallParams, McpDeleteParams,
+    McpSetEnabledParams, McpUpsertParams, MeshStartParams, Method, ListModelsParams,
+    NetworkTierResult, Notification, PeerIdParams, ProbeProviderParams, ProviderIdParams,
+    PtyIdParams, PtyOpenParams, PtyReadParams, PtyResizeParams, PtyWriteParams, RagIndexParams,
+    RagQueryParams, RegisterPeerParams, RejectPairingParams, RequestApprovalParams,
+    ResolveApprovalParams, RollbackParams, SearchSymbolsParams, SessionIdParams, SetModeParams,
+    SetNetworkTierParams, SetSessionProviderParams, StateGetParams, StateSetParams, TaskIdParams,
     TemplateScaffoldParams, TrustPeerParams, PROTOCOL_VERSION,
 };
+use crate::mcp_host::McpServerManifest;
 use crate::analyzer::SymbolSearchQuery;
 use crate::mesh::{PairAccept, SignedEnvelope};
 use source_core::types::{
@@ -791,6 +793,7 @@ async fn handle_method(
             Ok(json!(status))
         }
         Method::McpList => Ok(json!(state.mcp.list_filtered())),
+        Method::McpListAll => Ok(json!(state.mcp.list_all())),
         Method::McpReload => {
             let list = state
                 .mcp
@@ -811,6 +814,70 @@ async fn handle_method(
                 .await
                 .map_err(|e| JsonRpcError::internal(e.to_string()))?;
             Ok(result)
+        }
+        Method::McpUpsert => {
+            let p: McpUpsertParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let manifest = McpServerManifest {
+                id: p.id,
+                name: p.name,
+                transport: p.transport,
+                command: p.command,
+                url: p.url,
+                offline_capable: p.offline_capable,
+                requires_wan: p.requires_wan,
+                enabled: p.enabled,
+                env: p.env,
+            };
+            let info = state
+                .mcp
+                .upsert(manifest)
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?;
+            for t in state.mcp.as_tool_definitions() {
+                let _ = state.db.register_tool(&t).await;
+            }
+            Ok(json!(info))
+        }
+        Method::McpDelete => {
+            let p: McpDeleteParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            state
+                .mcp
+                .delete(&p.server_id)
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?;
+            Ok(json!({ "deleted": p.server_id }))
+        }
+        Method::McpSetEnabled => {
+            let p: McpSetEnabledParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let info = state
+                .mcp
+                .set_enabled(&p.server_id, p.enabled)
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?;
+            for t in state.mcp.as_tool_definitions() {
+                let _ = state.db.register_tool(&t).await;
+            }
+            Ok(json!(info))
+        }
+        Method::StateGet => {
+            let p: StateGetParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            let value = state
+                .db
+                .get_kv(&p.key)
+                .await
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?;
+            Ok(json!({ "key": p.key, "value": value }))
+        }
+        Method::StateSet => {
+            let p: StateSetParams = serde_json::from_value(params)
+                .map_err(|e| JsonRpcError::invalid_params(e.to_string()))?;
+            state
+                .db
+                .set_kv(&p.key, &p.value)
+                .await
+                .map_err(|e| JsonRpcError::internal(e.to_string()))?;
+            Ok(json!({ "key": p.key, "ok": true }))
         }
         Method::BrowserNavigate => {
             let p: BrowserNavigateParams = serde_json::from_value(params)

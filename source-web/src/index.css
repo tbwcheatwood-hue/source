@@ -66,3 +66,19 @@ header h1 {
 .xterm-viewport {
   overflow-y: auto !important;
 }
+
+body.ide-resizing-x {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+body.ide-resizing-y {
+  cursor: row-resize !important;
+  user-select: none !important;
+}
+
+body.ide-resizing-x *,
+body.ide-resizing-y * {
+  cursor: inherit !important;
+  user-select: none !important;
+}
