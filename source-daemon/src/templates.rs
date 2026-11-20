@@ -14,7 +14,7 @@ pub const BUILTIN_TEMPLATES: &[&str] = &[
 ];
 
 /// Bump when builtin seed contents change so `ensure_seeded` refreshes stale copies.
-pub const BUILTIN_TEMPLATE_VERSION: u64 = 2;
+pub const BUILTIN_TEMPLATE_VERSION: u64 = 3;
 
 pub const DESKTOP_TEMPLATE_ID: &str = "tauri-v2-react";
 
@@ -74,6 +74,7 @@ pub struct DesktopScaffoldResult {
     pub build_script: PathBuf,
     pub build_command: String,
     pub linux_deps_apt: String,
+    pub windows_deps: String,
     pub notes: Vec<String>,
 }
 
@@ -203,57 +204,126 @@ impl TemplateManager {
     pub fn create_desktop_app(&self, dest: &Path, name: Option<&str>) -> Result<DesktopScaffoldResult> {
         let app_name = name.unwrap_or("desktop-app");
         let dest = self.scaffold(DESKTOP_TEMPLATE_ID, dest, Some(app_name))?;
-        let build_script = dest.join("scripts/build-desktop.sh");
+        let build_script_sh = dest.join("scripts/build-desktop.sh");
+        let build_script_ps1 = dest.join("scripts/build-desktop.ps1");
+        #[cfg(windows)]
+        let (build_script, build_command) = if build_script_ps1.exists() {
+            (
+                build_script_ps1.clone(),
+                r".\scripts\build-desktop.ps1".to_string(),
+            )
+        } else if build_script_sh.exists() {
+            (
+                build_script_sh.clone(),
+                "./scripts/build-desktop.sh".to_string(),
+            )
+        } else {
+            (dest.join("package.json"), "pnpm tauri build".to_string())
+        };
+        #[cfg(not(windows))]
+        let (build_script, build_command) = if build_script_sh.exists() {
+            (
+                build_script_sh.clone(),
+                "./scripts/build-desktop.sh".to_string(),
+            )
+        } else if build_script_ps1.exists() {
+            (
+                build_script_ps1.clone(),
+                r".\scripts\build-desktop.ps1".to_string(),
+            )
+        } else {
+            (dest.join("package.json"), "pnpm tauri build".to_string())
+        };
         Ok(DesktopScaffoldResult {
             template_id: DESKTOP_TEMPLATE_ID.to_string(),
             dest: dest.clone(),
             name: app_name.to_string(),
-            build_script: build_script.clone(),
-            build_command: if build_script.exists() {
-                "./scripts/build-desktop.sh".into()
-            } else {
-                "pnpm tauri build".into()
-            },
+            build_script,
+            build_command,
             linux_deps_apt: linux_tauri_apt_install_command(),
+            windows_deps: windows_tauri_deps_notes(),
             notes: vec![
                 "Complete Tauri v2 + React desktop project — not an HTML substitute.".into(),
-                "If WebKitGTK/-dev packages are missing, install them then re-run the build script.".into(),
-                "Customize src/ and src-tauri/; keep scripts/build-desktop.sh as the ship path.".into(),
+                "Linux: install WebKitGTK/-dev if missing, then ./scripts/build-desktop.sh.".into(),
+                "Windows 11: MSVC + WebView2, then .\\scripts\\build-desktop.ps1 (NSIS/MSI).".into(),
+                "Customize src/ and src-tauri/; keep the platform build script as the ship path.".into(),
             ],
         })
     }
 
     /// Run the scaffolded (or Source) desktop build script / tauri build.
     pub fn build_desktop(&self, project: &Path, install_deps: bool) -> Result<DesktopBuildResult> {
-        let script = project.join("scripts/build-desktop.sh");
-        let command = if script.exists() {
-            if install_deps {
-                format!("{} --install-deps", script.display())
+        let script_sh = project.join("scripts/build-desktop.sh");
+        #[cfg(windows)]
+        let script_ps1 = project.join("scripts/build-desktop.ps1");
+
+        #[cfg(windows)]
+        let (command, mut cmd) = if script_ps1.exists() {
+            let command = if install_deps {
+                // Windows has no apt --install-deps; -CheckDeps is informational only.
+                r".\scripts\build-desktop.ps1".to_string()
             } else {
-                script.display().to_string()
+                r".\scripts\build-desktop.ps1".to_string()
+            };
+            let mut c = Command::new("powershell");
+            c.args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                script_ps1.to_str().unwrap_or(r".\scripts\build-desktop.ps1"),
+            ]);
+            c.current_dir(project);
+            (command, c)
+        } else if script_sh.exists() {
+            let command = if install_deps {
+                format!("{} --install-deps", script_sh.display())
+            } else {
+                script_sh.display().to_string()
+            };
+            let mut c = Command::new("bash");
+            c.arg(&script_sh);
+            if install_deps {
+                c.arg("--install-deps");
             }
+            c.current_dir(project);
+            (command, c)
         } else if project.join("src-tauri").exists() {
-            "pnpm tauri build".to_string()
+            let mut c = Command::new("pnpm");
+            c.args(["tauri", "build"]);
+            c.current_dir(project);
+            ("pnpm tauri build".to_string(), c)
+        } else {
+            return Err(anyhow!(
+                "{} is not a Tauri desktop project (missing build scripts and src-tauri)",
+                project.display()
+            ));
+        };
+
+        #[cfg(not(windows))]
+        let (command, mut cmd) = if script_sh.exists() {
+            let command = if install_deps {
+                format!("{} --install-deps", script_sh.display())
+            } else {
+                script_sh.display().to_string()
+            };
+            let mut c = Command::new("bash");
+            c.arg(&script_sh);
+            if install_deps {
+                c.arg("--install-deps");
+            }
+            c.current_dir(project);
+            (command, c)
+        } else if project.join("src-tauri").exists() {
+            let mut c = Command::new("pnpm");
+            c.args(["tauri", "build"]);
+            c.current_dir(project);
+            ("pnpm tauri build".to_string(), c)
         } else {
             return Err(anyhow!(
                 "{} is not a Tauri desktop project (missing scripts/build-desktop.sh and src-tauri)",
                 project.display()
             ));
-        };
-
-        let mut cmd = if script.exists() {
-            let mut c = Command::new("bash");
-            c.arg(&script);
-            if install_deps {
-                c.arg("--install-deps");
-            }
-            c.current_dir(project);
-            c
-        } else {
-            let mut c = Command::new("pnpm");
-            c.args(["tauri", "build"]);
-            c.current_dir(project);
-            c
         };
 
         let output = cmd.output().context("desktop build command failed to start")?;
@@ -305,8 +375,12 @@ impl TemplateManager {
                     "templates_ops op=create_desktop_app template={} (or source/templates/scaffold)",
                     DESKTOP_TEMPLATE_ID
                 ),
-                build_desktop: "./scripts/build-desktop.sh [--install-deps]".into(),
-                linux_tauri_deps: linux_tauri_apt_install_command(),
+                build_desktop: "./scripts/build-desktop.sh [--install-deps]  |  .\\scripts\\build-desktop.ps1".into(),
+                linux_tauri_deps: format!(
+                    "Linux: {} | Windows: {}",
+                    linux_tauri_apt_install_command(),
+                    windows_tauri_deps_notes()
+                ),
             },
         })
     }
@@ -385,6 +459,10 @@ pub fn linux_tauri_apt_install_command() -> String {
     )
 }
 
+pub fn windows_tauri_deps_notes() -> String {
+    "Windows 11: Rust MSVC toolchain (rustup default stable-x86_64-pc-windows-msvc), Visual Studio Build Tools (C++ + Windows SDK), Node 20+, pnpm 9+, git, WebView2 Runtime (usually preinstalled). Build: .\\scripts\\build-desktop.ps1".into()
+}
+
 fn resolve_bundled_template(id: &str, bundled_templates_dir: &Path) -> Option<PathBuf> {
     let primary = bundled_templates_dir.join(id);
     if primary.exists() {
@@ -407,6 +485,7 @@ fn template_needs_refresh(dest: &Path) -> bool {
     if dest.file_name().and_then(|s| s.to_str()) == Some(DESKTOP_TEMPLATE_ID) {
         let complete = dest.join("src-tauri/src/lib.rs").exists()
             && dest.join("scripts/build-desktop.sh").exists()
+            && dest.join("scripts/build-desktop.ps1").exists()
             && dest.join("src/App.tsx").exists();
         if !complete {
             return true;
@@ -710,7 +789,11 @@ pub fn run() {
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.png"]
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.png", "icons/icon.ico"],
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper" },
+      "nsis": { "installMode": "currentUser" }
+    }
   }
 }
 "#,
@@ -730,6 +813,18 @@ pub fn run() {
     for name in ["32x32.png", "128x128.png", "icon.png"] {
         fs::write(dest.join("src-tauri/icons").join(name), png_1x1)?;
     }
+    // Minimal ICO with embedded PNG (Vista+).
+    let mut ico = Vec::new();
+    ico.extend_from_slice(&0u16.to_le_bytes());
+    ico.extend_from_slice(&1u16.to_le_bytes());
+    ico.extend_from_slice(&1u16.to_le_bytes());
+    ico.extend_from_slice(&[0u8, 0, 0, 0]);
+    ico.extend_from_slice(&1u16.to_le_bytes());
+    ico.extend_from_slice(&32u16.to_le_bytes());
+    ico.extend_from_slice(&(png_1x1.len() as u32).to_le_bytes());
+    ico.extend_from_slice(&22u32.to_le_bytes());
+    ico.extend_from_slice(png_1x1);
+    fs::write(dest.join("src-tauri/icons/icon.ico"), ico)?;
     fs::write(
         dest.join("scripts/build-desktop.sh"),
         r#"#!/usr/bin/env bash
@@ -738,7 +833,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 INSTALL_DEPS=0
 for arg in "$@"; do [[ "$arg" == "--install-deps" ]] && INSTALL_DEPS=1; done
-if [[ "$(uname -s)" == "Linux" ]] && ! dpkg -s libwebkit2gtk-4.1-dev >/dev/null 2>&1; then
+OS="$(uname -s 2>/dev/null || echo unknown)"
+if [[ "$OS" == "Linux" ]] && ! dpkg -s libwebkit2gtk-4.1-dev >/dev/null 2>&1; then
   DEPS="libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf pkg-config build-essential curl wget file libssl-dev libayatana-appindicator3-dev"
   if [[ "$INSTALL_DEPS" -eq 1 ]]; then
     sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
@@ -748,14 +844,39 @@ if [[ "$(uname -s)" == "Linux" ]] && ! dpkg -s libwebkit2gtk-4.1-dev >/dev/null 
     echo "Or: ./scripts/build-desktop.sh --install-deps" >&2
   fi
 fi
+case "$OS" in
+  MINGW*|MSYS*|CYGWIN*|Windows_NT)
+    echo "Windows: prefer .\\scripts\\build-desktop.ps1 for NSIS/MSI" >&2
+    ;;
+esac
 if command -v pnpm >/dev/null 2>&1; then pnpm install --frozen-lockfile=false; pnpm tauri build
 else npm install; npx tauri build; fi
 echo "Desktop build complete → src-tauri/target/release/bundle"
 "#,
     )?;
     fs::write(
+        dest.join("scripts/build-desktop.ps1"),
+        r#"$ErrorActionPreference = "Stop"
+$Root = Split-Path -Parent $PSScriptRoot
+Set-Location $Root
+Write-Host "==> Installing JS deps"
+if (Get-Command pnpm -ErrorAction SilentlyContinue) {
+  pnpm install --frozen-lockfile=$false
+  if ($LASTEXITCODE -ne 0) { throw "pnpm install failed" }
+  Write-Host "==> tauri build (nsis,msi)"
+  pnpm exec tauri build -- --bundles nsis,msi
+} else {
+  npm install
+  if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
+  npx tauri build -- --bundles nsis,msi
+}
+if ($LASTEXITCODE -ne 0) { throw "tauri build failed" }
+Write-Host "Desktop build complete → src-tauri/target/release/bundle"
+"#,
+    )?;
+    fs::write(
         dest.join("README.md"),
-        "# Source Tauri v2 desktop app\n\nComplete desktop scaffold. Build with `./scripts/build-desktop.sh`.\nHTML-only is not a substitute for this target.\n",
+        "# Source Tauri v2 desktop app\n\nComplete desktop scaffold.\n\n- Linux/macOS: `./scripts/build-desktop.sh`\n- Windows 11: `.\\scripts\\build-desktop.ps1`\n\nHTML-only is not a substitute for this target.\n",
     )?;
     Ok(())
 }
@@ -918,6 +1039,7 @@ mod tests {
         assert!(dest.join("src-tauri/tauri.conf.json").exists());
         assert!(dest.join("src/App.tsx").exists());
         assert!(dest.join("scripts/build-desktop.sh").exists());
+        assert!(dest.join("scripts/build-desktop.ps1").exists());
         assert!(!dest.join("template.json").exists());
         let pkg: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(dest.join("package.json")).unwrap()).unwrap();
@@ -940,6 +1062,7 @@ mod tests {
         mgr.ensure_seeded().unwrap();
         assert!(templates.join(DESKTOP_TEMPLATE_ID).join("src-tauri/src/lib.rs").exists());
         assert!(templates.join(DESKTOP_TEMPLATE_ID).join("scripts/build-desktop.sh").exists());
+        assert!(templates.join(DESKTOP_TEMPLATE_ID).join("scripts/build-desktop.ps1").exists());
         let manifest: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(templates.join(DESKTOP_TEMPLATE_ID).join("template.json")).unwrap(),
         )

@@ -17,9 +17,10 @@ Local-first agent IDE. Daemon + shared protocol (Phases 1–4), **unified dark I
 - Rust **1.100+** (see `rust-toolchain.toml`)
 - Node **20+** and **pnpm** 9+
 - `git` (shadow checkpoints)
-- Chromium/Chrome for `headless_browser` / `app_verifier`
+- Chromium/Chrome/Edge for `headless_browser` / `app_verifier`
 - Optional: NVIDIA + `nvidia-smi` for cluster GPU metrics
-- Linux desktop: WebKitGTK 4.1 / GTK 3 (Tauri). Install with `./scripts/build-desktop.sh --install-deps` or see `.sourcerules`.
+- **Linux desktop:** WebKitGTK 4.1 / GTK 3 (Tauri). Install with `./scripts/build-desktop.sh --install-deps` or see `.sourcerules`.
+- **Windows 11 desktop:** Rust **MSVC** toolchain, Visual Studio Build Tools (C++ + Windows SDK), WebView2 Runtime (usually preinstalled). See [source-desktop/README.md](source-desktop/README.md).
 
 ## Verify (preview gate)
 
@@ -59,6 +60,8 @@ Open `http://127.0.0.1:5173` (Vite proxies `/rpc` + `/ws`).
 
 ## Desktop preview
 
+### Linux / macOS
+
 ```bash
 cargo run -p source-daemon -- --bind 127.0.0.1:7420
 pnpm --filter source-desktop tauri:dev
@@ -71,6 +74,16 @@ Production binary (needs WebKitGTK on Linux):
 ./scripts/build-desktop.sh --install-deps # non-interactive apt when sudo allows
 ./scripts/build-desktop.sh
 ```
+
+### Windows 11
+
+```powershell
+.\scripts\offline-init.ps1          # one-time offline seed
+.\scripts\run-desktop.ps1           # daemon + tauri:dev
+.\scripts\build-desktop.ps1         # NSIS + MSI installers + daemon sidecar
+```
+
+The packaged app auto-starts the bundled `source-daemon` sidecar when `/health` is down. Data still lives under `%USERPROFILE%\.source\` (`SOURCE_HOME` overrides).
 
 **Product rule:** when a user asks for a desktop app, Source ships a finished Tauri v2 project (`templates_ops` → `create_desktop_app` / template `tauri-v2-react`). Never refuse with “can’t build desktop here” or substitute HTML-only unless they asked for web-only. See `.sourcerules`.
 
@@ -97,4 +110,4 @@ IPC commands: `bridge_info`, `daemon_rpc`, `daemon_status`, `daemon_network_tier
 
 ## Data directory
 
-Defaults to `~/.source/` (`SOURCE_HOME` overrides the home used for that path). Seed with `./scripts/offline-init.sh`.
+Defaults to `~/.source/` on Unix and `%USERPROFILE%\.source\` on Windows (`SOURCE_HOME` overrides the home used for that path). Seed with `./scripts/offline-init.sh` or `.\scripts\offline-init.ps1`.

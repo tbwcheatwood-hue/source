@@ -11,11 +11,21 @@ pnpm tauri:dev
 
 ## Production binary
 
+### Linux / macOS
+
 ```bash
 ./scripts/build-desktop.sh
 # Linux without WebKitGTK/GTK -dev packages:
 ./scripts/build-desktop.sh --install-deps
 ```
+
+### Windows 11
+
+```powershell
+.\scripts\build-desktop.ps1
+```
+
+Requires Rust MSVC toolchain, Visual Studio Build Tools (C++ + Windows SDK), Node 20+, pnpm, and WebView2 (preinstalled on Windows 11).
 
 ### Linux packages
 

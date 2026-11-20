@@ -63,7 +63,18 @@ impl PtyRunner {
         })?;
 
         let shell = shell.unwrap_or_else(default_shell);
-        let cwd = cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
+        let cwd = cwd.unwrap_or_else(|| {
+            std::env::current_dir().unwrap_or_else(|_| {
+                #[cfg(windows)]
+                {
+                    PathBuf::from(std::env::var("USERPROFILE").unwrap_or_else(|_| r"C:\".into()))
+                }
+                #[cfg(not(windows))]
+                {
+                    PathBuf::from("/")
+                }
+            })
+        });
         let mut cmd = CommandBuilder::new(&shell);
         cmd.cwd(&cwd);
         if let Some(map) = env {
@@ -71,8 +82,13 @@ impl PtyRunner {
                 cmd.env(k, v);
             }
         }
-        // Interactive login-ish shell
-        if shell.ends_with("bash") || shell.ends_with("zsh") {
+        // Interactive login-ish shell (Unix). Windows PowerShell/cmd need no -i.
+        let shell_base = std::path::Path::new(&shell)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(shell.as_str())
+            .to_ascii_lowercase();
+        if shell_base == "bash" || shell_base == "zsh" || shell_base == "bash.exe" {
             cmd.arg("-i");
         }
 
@@ -247,21 +263,62 @@ fn drain_buffer(buffer: &Arc<Mutex<Vec<u8>>>, max_bytes: usize) -> String {
 }
 
 fn default_shell() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into())
+    if let Ok(shell) = std::env::var("SHELL") {
+        if !shell.is_empty() {
+            return shell;
+        }
+    }
+    #[cfg(windows)]
+    {
+        std::env::var("COMSPEC").unwrap_or_else(|_| {
+            // Prefer PowerShell when present; fall back to cmd.exe.
+            which::which("pwsh")
+                .or_else(|_| which::which("powershell"))
+                .ok()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| r"C:\Windows\System32\cmd.exe".into())
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        "/bin/bash".into()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn test_shell() -> String {
+        #[cfg(windows)]
+        {
+            default_shell()
+        }
+        #[cfg(not(windows))]
+        {
+            "/bin/bash".into()
+        }
+    }
+
+    fn test_echo_command() -> &'static str {
+        #[cfg(windows)]
+        {
+            "echo source-pty-ok\r\n"
+        }
+        #[cfg(not(windows))]
+        {
+            "echo source-pty-ok\n"
+        }
+    }
+
     #[test]
     fn open_echo_and_read() {
         let runner = PtyRunner::new();
         let info = runner
-            .open(None, Some("/bin/bash".into()), Some(80), Some(24), None)
+            .open(None, Some(test_shell()), Some(80), Some(24), None)
             .expect("open pty");
         runner
-            .write(&info.pty_id, "echo source-pty-ok\n")
+            .write(&info.pty_id, test_echo_command())
             .expect("write");
         let mut saw = String::new();
         for _ in 0..40 {

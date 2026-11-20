@@ -11,11 +11,11 @@ These rules are non-negotiable for every Plan/Act turn and every agent working i
    - "Tauri/WebKitGTK isn't available so here's a web page"
 2. When the user asks for a **desktop app**, Source **MUST** produce a finished **Tauri v2** project (preferred) or an equivalent native desktop project **under the workspace**.
 3. **HTML-only / static web** is allowed **only** when the user explicitly asked for a web page / website / HTML. It is **never** a substitute for a desktop request.
-4. Prefer completing `scripts/build-desktop.sh` / `pnpm tauri build` / `tauri build`. If WebKitGTK or `-dev` packages are missing:
-   - install them when possible (`./scripts/build-desktop.sh --install-deps`, or the exact `apt` packages below), **or**
-   - document the exact apt packages,
+4. Prefer completing `scripts/build-desktop.sh` / `scripts/build-desktop.ps1` / `pnpm tauri build` / `tauri build`. If platform deps are missing:
+   - **Linux:** install WebKitGTK when possible (`./scripts/build-desktop.sh --install-deps`, or the exact `apt` packages below), **or** document them,
+   - **Windows 11:** document MSVC Build Tools + WebView2 and use `.\scripts\build-desktop.ps1`,
    - and **still leave a complete Tauri project** that builds once deps exist.
-5. Do **not** abandon the desktop target. A complete `src-tauri/` + frontend that is ready to build counts as shipping the desktop app; a binary is required when GTK/WebKit deps are present.
+5. Do **not** abandon the desktop target. A complete `src-tauri/` + frontend that is ready to build counts as shipping the desktop app; a binary/installer is required when platform deps are present.
 
 ## Required workflow for desktop requests
 
@@ -25,8 +25,8 @@ These rules are non-negotiable for every Plan/Act turn and every agent working i
    - Or: `source/templates/scaffold` with `template_id: "tauri-v2-react"`
 3. Customize the scaffolded UI/backend for the user's request (calculator-class apps stay offline-capable).
 4. Build:
-   - App project: `./scripts/build-desktop.sh` inside the scaffold, or `pnpm tauri build`
-   - Source IDE itself: repo-root `./scripts/build-desktop.sh`
+   - App project: `./scripts/build-desktop.sh` or `.\scripts\build-desktop.ps1` inside the scaffold, or `pnpm tauri build`
+   - Source IDE itself: repo-root `./scripts/build-desktop.sh` / `.\scripts\build-desktop.ps1`
 5. Verify with `app_verifier` (`kind: "desktop"` or launch + assert) and/or `terminal_exec`.
 
 ## Linux Tauri deps (exact)
@@ -40,9 +40,18 @@ sudo apt-get install -y \
 
 Or: `./scripts/build-desktop.sh --install-deps` (non-interactive when passwordless sudo is available).
 
+## Windows 11 Tauri deps (exact)
+
+- Rust MSVC: `rustup default stable-x86_64-pc-windows-msvc`
+- Visual Studio Build Tools with **Desktop development with C++** (MSVC + Windows SDK)
+- Node.js 20+, pnpm 9+, git
+- WebView2 Runtime (preinstalled on Windows 11; NSIS can download bootstrapper)
+
+Or: `.\scripts\build-desktop.ps1 -CheckDeps` then `.\scripts\build-desktop.ps1`.
+
 ## Offline paths
 
-- Templates: `~/.source/templates/` (esp. `tauri-v2-react`)
+- Templates: `~/.source/templates/` / `%USERPROFILE%\.source\templates\` (esp. `tauri-v2-react`)
 - Caches: `~/.source/cache/vendor/{npm,pnpm,cargo,wheels}`
 - Override home with `SOURCE_HOME`
 

@@ -145,7 +145,7 @@ pub fn phase3_builtin_tools() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "templates_ops".into(),
-            description: "Offline app factory: list/scaffold templates, create_desktop_app (Tauri v2), build_desktop, linux_deps, vendor_status. REQUIRED for desktop requests — never refuse or substitute HTML-only.".into(),
+            description: "Offline app factory: list/scaffold templates, create_desktop_app (Tauri v2), build_desktop, linux_deps, windows_deps, vendor_status. REQUIRED for desktop requests — never refuse or substitute HTML-only.".into(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -157,6 +157,7 @@ pub fn phase3_builtin_tools() -> Vec<ToolDefinition> {
                             "create_desktop_app",
                             "build_desktop",
                             "linux_deps",
+                            "windows_deps",
                             "vendor_status"
                         ]
                     },
@@ -425,8 +426,18 @@ async fn exec_terminal(ctx: &OfflineToolContext<'_>, args: &Value) -> Result<Str
         "exec" => {
             let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
             let cwd = args.get("cwd").and_then(|v| v.as_str());
-            let mut cmd = Command::new("bash");
-            cmd.arg("-lc").arg(command);
+            #[cfg(windows)]
+            let mut cmd = {
+                let mut c = Command::new("cmd");
+                c.args(["/C", command]);
+                c
+            };
+            #[cfg(not(windows))]
+            let mut cmd = {
+                let mut c = Command::new("bash");
+                c.arg("-lc").arg(command);
+                c
+            };
             if let Some(c) = cwd {
                 cmd.current_dir(c);
             }
@@ -525,7 +536,8 @@ async fn exec_verifier(ctx: &OfflineToolContext<'_>, args: &Value) -> Result<Str
                 "kind": "desktop",
                 "build": build,
                 "linux_deps": crate::templates::linux_tauri_apt_install_command(),
-                "note": "Desktop target retained. If build failed on missing WebKitGTK/-dev packages, install deps and re-run — do not switch to HTML-only."
+                "windows_deps": crate::templates::windows_tauri_deps_notes(),
+                "note": "Desktop target retained. On Linux, install WebKitGTK/-dev if missing; on Windows 11 use MSVC + WebView2 and .\\scripts\\build-desktop.ps1 — do not switch to HTML-only."
             }))?);
         }
         // Optional: after build, also verify a URL if provided (e.g. tauri dev webview host).
@@ -603,6 +615,11 @@ fn exec_templates(ctx: &OfflineToolContext<'_>, args: &Value) -> Result<String> 
             "packages": crate::templates::LINUX_TAURI_APT_PACKAGES,
             "apt_install": crate::templates::linux_tauri_apt_install_command(),
             "helper": "./scripts/build-desktop.sh --install-deps"
+        }))?),
+        "windows_deps" => Ok(serde_json::to_string_pretty(&json!({
+            "notes": crate::templates::windows_tauri_deps_notes(),
+            "helper": ".\\scripts\\build-desktop.ps1 -CheckDeps",
+            "build": ".\\scripts\\build-desktop.ps1"
         }))?),
         "vendor_status" => Ok(serde_json::to_string_pretty(&ctx.templates.vendor_status()?)?),
         other => Err(anyhow!("unknown templates_ops op {other}")),
@@ -823,12 +840,45 @@ fn exec_archive_system(args: &Value) -> Result<String> {
             Ok(format!("extracted {} -> {}", path.display(), dest.display()))
         }
         "uname" => {
-            let out = Command::new("uname").arg("-a").output()?;
-            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+            #[cfg(windows)]
+            {
+                let out = Command::new("cmd")
+                    .args(["/C", "ver"])
+                    .output()
+                    .or_else(|_| {
+                        Command::new("powershell")
+                            .args([
+                                "-NoProfile",
+                                "-Command",
+                                "[System.Environment]::OSVersion.VersionString",
+                            ])
+                            .output()
+                    })?;
+                Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+            }
+            #[cfg(not(windows))]
+            {
+                let out = Command::new("uname").arg("-a").output()?;
+                Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+            }
         }
         "df" => {
-            let out = Command::new("df").args(["-h"]).output()?;
-            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+            #[cfg(windows)]
+            {
+                let out = Command::new("powershell")
+                    .args([
+                        "-NoProfile",
+                        "-Command",
+                        "Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize | Out-String",
+                    ])
+                    .output()?;
+                Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+            }
+            #[cfg(not(windows))]
+            {
+                let out = Command::new("df").args(["-h"]).output()?;
+                Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+            }
         }
         "which" => {
             let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");

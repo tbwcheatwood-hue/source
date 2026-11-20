@@ -271,7 +271,7 @@ impl PlanActMachine {
             || (tool.name == "local_rag_docs" && matches!(op, Some("query" | "status")))
             || (tool.name == "headless_browser" && op == Some("inspect"))
             || (tool.name == "templates_ops"
-                && matches!(op, Some("list" | "linux_deps" | "vendor_status")));
+                && matches!(op, Some("list" | "linux_deps" | "windows_deps" | "vendor_status")));
         if tool.name == "git_ops"
             && op == Some("branch")
             && call.arguments.get("ref_name").and_then(|v| v.as_str()).is_some()
@@ -523,10 +523,21 @@ impl PlanActMachine {
                     .get("command")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let output = std::process::Command::new("bash")
-                    .arg("-lc")
-                    .arg(command)
-                    .output();
+                let output = {
+                    #[cfg(windows)]
+                    {
+                        std::process::Command::new("cmd")
+                            .args(["/C", command])
+                            .output()
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        std::process::Command::new("bash")
+                            .arg("-lc")
+                            .arg(command)
+                            .output()
+                    }
+                };
                 match output {
                     Ok(out) => {
                         let code = out.status.code().unwrap_or(-1);

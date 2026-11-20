@@ -8,8 +8,10 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit --pretty false",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "stage-daemon": "cargo build -p source-daemon --manifest-path ../Cargo.toml",
+    "stage-daemon:release": "cargo build -p source-daemon --release --manifest-path ../Cargo.toml",
+    "tauri:dev": "pnpm run stage-daemon && tauri dev",
+    "tauri:build": "pnpm run stage-daemon:release && tauri build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.1.1",
