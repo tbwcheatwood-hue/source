@@ -7,3 +7,6 @@ dist/
 .DS_Store
 source-web/dist/
 source-desktop/dist/
+
+# Tauri sidecar binaries staged by build-desktop scripts
+source-desktop/src-tauri/binaries/source-daemon-*

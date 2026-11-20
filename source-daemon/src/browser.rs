@@ -181,13 +181,7 @@ impl HeadlessBrowser {
             .await?;
 
         let timeout = Duration::from_millis(timeout_ms.unwrap_or(30_000));
-        let mut child = Command::new("bash")
-            .arg("-lc")
-            .arg(launch_command)
-            .current_dir(cwd.unwrap_or("."))
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
+        let mut child = spawn_shell_command(launch_command, cwd.unwrap_or("."))
             .map_err(|e| CoreError::other(format!("launch failed: {e}")))?;
         let pid = child.id();
 
@@ -428,19 +422,68 @@ fn free_port() -> Result<u16> {
     Ok(listener.local_addr()?.port())
 }
 
+fn spawn_shell_command(launch_command: &str, cwd: &str) -> std::io::Result<std::process::Child> {
+    #[cfg(windows)]
+    {
+        Command::new("cmd")
+            .args(["/C", launch_command])
+            .current_dir(cwd)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+    }
+    #[cfg(not(windows))]
+    {
+        Command::new("bash")
+            .arg("-lc")
+            .arg(launch_command)
+            .current_dir(cwd)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+    }
+}
+
 fn find_chrome() -> PathBuf {
-    for cand in [
+    let path_candidates = [
         "google-chrome-stable",
         "google-chrome",
         "chromium-browser",
         "chromium",
         "chrome",
-    ] {
+        "msedge",
+    ];
+    for cand in path_candidates {
         if let Ok(p) = which::which(cand) {
             return p;
         }
     }
-    PathBuf::from("/usr/bin/google-chrome")
+
+    #[cfg(windows)]
+    {
+        let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let program_files = std::env::var("PROGRAMFILES").unwrap_or_else(|_| r"C:\Program Files".into());
+        let program_files_x86 =
+            std::env::var("PROGRAMFILES(X86)").unwrap_or_else(|_| r"C:\Program Files (x86)".into());
+        for cand in [
+            PathBuf::from(&local).join(r"Google\Chrome\Application\chrome.exe"),
+            PathBuf::from(&program_files).join(r"Google\Chrome\Application\chrome.exe"),
+            PathBuf::from(&program_files_x86).join(r"Google\Chrome\Application\chrome.exe"),
+            PathBuf::from(&program_files).join(r"Microsoft\Edge\Application\msedge.exe"),
+            PathBuf::from(&program_files_x86).join(r"Microsoft\Edge\Application\msedge.exe"),
+            PathBuf::from(&local).join(r"Chromium\Application\chrome.exe"),
+        ] {
+            if cand.exists() {
+                return cand;
+            }
+        }
+        return PathBuf::from(r"C:\Program Files\Google\Chrome\Application\chrome.exe");
+    }
+
+    #[cfg(not(windows))]
+    {
+        PathBuf::from("/usr/bin/google-chrome")
+    }
 }
 
 #[cfg(test)]

@@ -14,6 +14,8 @@ Usage: ./scripts/build-desktop.sh [--install-deps]
 
 Builds the Tauri v2 desktop binary for this project.
   --install-deps  On Linux, apt-get install WebKitGTK/GTK -dev packages (non-interactive).
+
+Windows 11: prefer .\scripts\build-desktop.ps1
 EOF
       exit 0
       ;;
@@ -26,7 +28,9 @@ libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf pkg-config build-essent
 EOF
 }
 
-if [[ "$(uname -s)" == "Linux" ]]; then
+OS="$(uname -s 2>/dev/null || echo unknown)"
+
+if [[ "$OS" == "Linux" ]]; then
   missing=0
   for pkg in libwebkit2gtk-4.1-dev libgtk-3-dev; do
     if ! dpkg -s "$pkg" >/dev/null 2>&1; then
@@ -58,15 +62,27 @@ EOF
   fi
 fi
 
+case "$OS" in
+  MINGW*|MSYS*|CYGWIN*|Windows_NT)
+    echo "==> Windows host: prefer .\\scripts\\build-desktop.ps1 for NSIS/MSI"
+    ;;
+esac
+
 echo "==> Installing JS deps"
 if command -v pnpm >/dev/null 2>&1; then
   pnpm install --frozen-lockfile=false
   echo "==> tauri build"
-  pnpm tauri build
+  case "$OS" in
+    MINGW*|MSYS*|CYGWIN*|Windows_NT) pnpm exec tauri build --bundles nsis,msi ;;
+    *) pnpm tauri build ;;
+  esac
 else
   npm install
   echo "==> tauri build"
-  npx tauri build
+  case "$OS" in
+    MINGW*|MSYS*|CYGWIN*|Windows_NT) npx tauri build --bundles nsis,msi ;;
+    *) npx tauri build ;;
+  esac
 fi
 
 echo "==> Desktop build complete"

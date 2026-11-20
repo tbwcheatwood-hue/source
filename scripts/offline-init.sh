@@ -65,6 +65,11 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   pkg-config build-essential curl wget file libssl-dev \
   libayatana-appindicator3-dev
 ```
+
+Windows 11 deps:
+
+- Rust MSVC toolchain, VS Build Tools (C++ + Windows SDK), Node 20+, pnpm, git, WebView2
+- Build: `.\\scripts\\build-desktop.ps1`
 EOF
 
 # Optional sample MCP extension (disabled echo stub via stdio python).
