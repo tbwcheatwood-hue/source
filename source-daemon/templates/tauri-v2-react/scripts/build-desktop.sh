@@ -73,14 +73,14 @@ if command -v pnpm >/dev/null 2>&1; then
   pnpm install --frozen-lockfile=false
   echo "==> tauri build"
   case "$OS" in
-    MINGW*|MSYS*|CYGWIN*|Windows_NT) pnpm exec tauri build -- --bundles nsis,msi ;;
+    MINGW*|MSYS*|CYGWIN*|Windows_NT) pnpm exec tauri build --bundles nsis,msi ;;
     *) pnpm tauri build ;;
   esac
 else
   npm install
   echo "==> tauri build"
   case "$OS" in
-    MINGW*|MSYS*|CYGWIN*|Windows_NT) npx tauri build -- --bundles nsis,msi ;;
+    MINGW*|MSYS*|CYGWIN*|Windows_NT) npx tauri build --bundles nsis,msi ;;
     *) npx tauri build ;;
   esac
 fi

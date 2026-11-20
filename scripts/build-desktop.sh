@@ -196,7 +196,7 @@ fi
 case "$OS" in
   Linux) ensure_linux_deps ;;
   MINGW*|MSYS*|CYGWIN*|Windows_NT)
-    echo "==> Windows host detected — prefer .\\scripts\\build-desktop.ps1 for NSIS/MSI"
+    echo "==> Windows host detected - prefer .\\scripts\\build-desktop.ps1 for NSIS/MSI"
     check_windows_cli_deps || true
     ;;
 esac
@@ -212,7 +212,8 @@ build_ok=0
 case "$OS" in
   MINGW*|MSYS*|CYGWIN*|Windows_NT)
     # Match PowerShell script: ship installers Windows users expect.
-    if pnpm --filter source-desktop exec tauri build -- --bundles nsis,msi; then
+    # Do not insert "--" before --bundles (pnpm would forward it to cargo).
+    if pnpm --filter source-desktop exec tauri build --bundles nsis,msi; then
       build_ok=1
     fi
     ;;
@@ -237,5 +238,5 @@ EOF
 fi
 
 echo "==> Desktop build complete"
-echo "    see source-desktop/src-tauri/target/release/ and bundle/"
-ls -la source-desktop/src-tauri/target/release/bundle 2>/dev/null || true
+echo "    see target/release/ and target/release/bundle/ (workspace Cargo target)"
+ls -la target/release/bundle 2>/dev/null || true

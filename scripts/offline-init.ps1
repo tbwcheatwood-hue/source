@@ -4,6 +4,11 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
+function Write-Utf8NoBom([string]$Path, [string]$Content) {
+  $encoding = New-Object System.Text.UTF8Encoding $false
+  [System.IO.File]::WriteAllText($Path, $Content, $encoding)
+}
+
 $HomeBase = if ($env:SOURCE_HOME) { $env:SOURCE_HOME } else { $env:USERPROFILE }
 $SourceRoot = Join-Path $HomeBase ".source"
 
@@ -25,16 +30,16 @@ Write-Host "==> Seeding Source offline layout at $SourceRoot"
 
 $Doc = Join-Path $SourceRoot "offline-docs\source-overview.md"
 if (-not (Test-Path $Doc)) {
-  @"
+  Write-Utf8NoBom $Doc @"
 # Source offline docs
 
 Source is a local-first agent IDE.
 
 ## Network tiers
 
-- LOCAL_ONLY — loopback only; mesh disabled
-- LOCAL_AND_LAN — RFC1918 + Tailscale CGNAT; mesh allowed
-- UNRESTRICTED_CONFIGURABLE — allowlist + approval for public hosts
+- LOCAL_ONLY - loopback only; mesh disabled
+- LOCAL_AND_LAN - RFC1918 + Tailscale CGNAT; mesh allowed
+- UNRESTRICTED_CONFIGURABLE - allowlist + approval for public hosts
 
 ## Plan / Act
 
@@ -43,11 +48,11 @@ Plan mode is read-only. Act mode requires approval gates for File Edits, Shell, 
 ## Mesh
 
 Pair peers with a 6-digit PIN. Register hosts by IP or Tailscale MagicDNS.
-"@ | Set-Content -Encoding utf8 $Doc
+"@
 }
 
 $DesktopDoc = Join-Path $SourceRoot "offline-docs\desktop-apps.md"
-@"
+Write-Utf8NoBom $DesktopDoc @"
 # Desktop apps (HARD RULE)
 
 NEVER refuse native/desktop requests with "this environment can't", "use Electron later", or "HTML-only instead".
@@ -77,13 +82,14 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   pkg-config build-essential curl wget file libssl-dev \
   libayatana-appindicator3-dev
 ``````
-"@ | Set-Content -Encoding utf8 $DesktopDoc
+"@
 
 $ExtDir = Join-Path $SourceRoot "extensions\sample-echo"
 $ExtManifest = Join-Path $ExtDir "mcp.json"
 if (-not (Test-Path $ExtManifest)) {
   New-Item -ItemType Directory -Force -Path $ExtDir | Out-Null
-  @"
+  # PS 5.1 Set-Content -Encoding utf8 writes a BOM that breaks serde_json.
+  Write-Utf8NoBom $ExtManifest @"
 {
   "id": "sample-echo",
   "name": "Sample Echo",
@@ -93,18 +99,20 @@ if (-not (Test-Path $ExtManifest)) {
   "requires_wan": false,
   "enabled": false
 }
-"@ | Set-Content -Encoding utf8 $ExtManifest
+"@
 }
 
-Write-Host "==> Bootstrapping daemon to seed templates…"
+Write-Host "==> Bootstrapping daemon to seed templates..."
 $env:SOURCE_HOME = $HomeBase
 cargo build -q -p source-daemon
 if ($LASTEXITCODE -ne 0) { throw "cargo build source-daemon failed" }
 
 $Bind = "127.0.0.1:17421"
 $Daemon = Join-Path $Root "target\debug\source-daemon.exe"
-$Log = Join-Path $env:TEMP "source-offline-init.log"
-$Proc = Start-Process -FilePath $Daemon -ArgumentList @("--bind", $Bind) -RedirectStandardOutput $Log -RedirectStandardError $Log -PassThru -WindowStyle Hidden
+$LogOut = Join-Path $env:TEMP "source-offline-init.out.log"
+$LogErr = Join-Path $env:TEMP "source-offline-init.err.log"
+# Start-Process requires distinct stdout/stderr redirect paths.
+$Proc = Start-Process -FilePath $Daemon -ArgumentList @("--bind", $Bind) -RedirectStandardOutput $LogOut -RedirectStandardError $LogErr -PassThru -WindowStyle Hidden
 
 $ok = $false
 for ($i = 0; $i -lt 80; $i++) {
@@ -119,7 +127,7 @@ for ($i = 0; $i -lt 80; $i++) {
 
 if (-not $ok) {
   if (-not $Proc.HasExited) { Stop-Process -Id $Proc.Id -Force -ErrorAction SilentlyContinue }
-  throw "daemon failed during offline-init; see $Log"
+  throw "daemon failed during offline-init; see $LogOut and $LogErr"
 }
 
 try {

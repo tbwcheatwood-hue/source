@@ -28,10 +28,10 @@ Prerequisites (Windows 11):
   - WebView2 Runtime (preinstalled on Windows 11)
   - git (shadow checkpoints / offline tools)
 
-Artifacts:
-  source-desktop\src-tauri\target\release\source-desktop.exe
-  source-desktop\src-tauri\target\release\bundle\nsis\
-  source-desktop\src-tauri\target\release\bundle\msi\
+Artifacts (Cargo workspace target/):
+  target\release\source-desktop.exe
+  target\release\bundle\nsis\
+  target\release\bundle\msi\
 "@
 }
 
@@ -53,7 +53,7 @@ function Show-WindowsDeps {
     if ($i.Ok) {
       Write-Host ("  [ok] {0}" -f $i.Name)
     } else {
-      Write-Host ("  [MISSING] {0} — {1}" -f $i.Name, $i.Hint)
+      Write-Host ("  [MISSING] {0} - {1}" -f $i.Name, $i.Hint)
       $missing = $true
     }
   }
@@ -95,7 +95,7 @@ if (-not $SkipDaemon) {
   Copy-Item -Force $DaemonSrc $Sidecar
   Write-Host "    staged $Sidecar"
 } elseif (-not (Test-Path $Sidecar)) {
-  throw "Sidecar missing at $Sidecar — omit -SkipDaemon or place the binary first"
+  throw "Sidecar missing at $Sidecar - omit -SkipDaemon or place the binary first"
 }
 
 Write-Host "==> Building source-web (Tauri frontendDist)"
@@ -105,14 +105,16 @@ pnpm --filter source-web build
 if ($LASTEXITCODE -ne 0) { throw "source-web build failed" }
 
 Write-Host "==> Building Tauri desktop (NSIS + MSI)"
-pnpm --filter source-desktop exec tauri build -- --bundles nsis,msi
+# Do not insert "--" before --bundles: pnpm would forward it to cargo and break the build.
+pnpm --filter source-desktop exec tauri build --bundles nsis,msi
 if ($LASTEXITCODE -ne 0) {
   throw "Desktop build failed"
 }
 
 Write-Host "==> Desktop build complete"
-$Bundle = Join-Path $Root "source-desktop\src-tauri\target\release\bundle"
+# Workspace Cargo.toml members share repo-root target/
+$Bundle = Join-Path $Root "target\release\bundle"
 if (Test-Path $Bundle) {
   Get-ChildItem -Recurse $Bundle | Select-Object FullName, Length
 }
-Write-Host "Installer(s) under source-desktop\src-tauri\target\release\bundle\{nsis,msi}"
+Write-Host "Installer(s) under target\release\bundle\{nsis,msi}"

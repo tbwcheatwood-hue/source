@@ -35,11 +35,11 @@ pnpm --filter source-desktop tauri:dev
 ./scripts/build-desktop.sh
 ```
 
-Artifacts:
+Artifacts (Cargo **workspace** `target/`):
 
-- `source-desktop/src-tauri/target/release/source-desktop`
-- `source-desktop/src-tauri/target/release/bundle/{deb,rpm,appimage}/`
-- Sidecar: `source-desktop/src-tauri/binaries/source-daemon-<triple>`
+- `target/release/source-desktop`
+- `target/release/bundle/{deb,rpm,appimage}/`
+- Sidecar staged at: `source-desktop/src-tauri/binaries/source-daemon-<triple>`
 
 ### Windows 11
 
@@ -55,12 +55,12 @@ Prerequisites:
 - Node 20+, pnpm 9+, git
 - WebView2 Runtime (preinstalled on Windows 11; installer can bootstrap if missing)
 
-Artifacts:
+Artifacts (Cargo **workspace** `target/`):
 
-- `source-desktop\src-tauri\target\release\source-desktop.exe`
-- `source-desktop\src-tauri\target\release\bundle\nsis\` (setup installer)
-- `source-desktop\src-tauri\target\release\bundle\msi\`
-- Sidecar: `source-desktop\src-tauri\binaries\source-daemon-x86_64-pc-windows-msvc.exe`
+- `target\release\source-desktop.exe`
+- `target\release\bundle\nsis\` (setup installer)
+- `target\release\bundle\msi\`
+- Sidecar staged at: `source-desktop\src-tauri\binaries\source-daemon-x86_64-pc-windows-msvc.exe`
 
 Git Bash users can also run `./scripts/build-desktop.sh` (still prefer the `.ps1` on Windows).
 
